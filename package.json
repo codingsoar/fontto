@@ -1,0 +1,18 @@
+{
+  "name": "fontto",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:local": "vite --host 127.0.0.1 --port 5173",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "vite": "^8.0.9"
+  },
+  "dependencies": {
+    "opentype.js": "^1.3.4"
+  }
+}
