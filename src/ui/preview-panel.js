@@ -1,18 +1,26 @@
-/**
- * preview-panel.js — 실시간 미리보기 패널
- */
-
-import { compose, decompose, CHO, JUNG, JONG } from '../core/hangul.js';
+﻿import { compose, decompose, CHO, JUNG, JONG } from '../core/hangul.js';
 import { composeSyllable } from '../core/composer.js';
 
 export class PreviewPanel {
-  /**
-   * @param {HTMLElement} container
-   */
-  constructor(container) {
+  constructor(container, options = {}) {
     this.container = container;
+    this.options = options;
+    this.showPreviewInput = options.showPreviewInput !== false;
+    this.showPreviewCanvas = options.showPreviewCanvas !== false;
+    this.showBrowser = options.showBrowser !== false;
     this.jamoLib = {};
-    this.sampleText = '가나다라마바사 아야어여오요우유으이';
+    this.syllableImports = {};
+    this.sampleText = '가나다라마바사 아자차카타파하';
+    this.browserPage = 0;
+    this.browserPageSize = 35;
+    this.browserSelectedChar = '가';
+    this.allSyllables = null;
+    this.previewInput = null;
+    this.previewCanvas = null;
+    this.browserGrid = null;
+    this.browserPageLabel = null;
+    this.browserInput = null;
+    this.importImageCache = new Map();
     this._build();
   }
 
@@ -20,49 +28,106 @@ export class PreviewPanel {
     this.container.innerHTML = '';
     this.container.classList.add('preview-panel');
 
-    // 샘플 텍스트 입력
-    const inputArea = document.createElement('div');
-    inputArea.className = 'preview-input-area';
+    if (this.showPreviewInput) {
+      const inputArea = document.createElement('div');
+      inputArea.className = 'preview-input-area';
 
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.className = 'preview-input';
-    input.placeholder = '미리보기 텍스트를 입력하세요...';
-    input.value = this.sampleText;
-    let isComposing = false;
-    input.addEventListener('compositionstart', () => {
-      isComposing = true;
-    });
-    input.addEventListener('compositionend', (e) => {
-      isComposing = false;
-      requestAnimationFrame(() => {
-        this.sampleText = e.target.value;
-        this._renderPreview();
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'preview-input';
+      input.placeholder = '미리보기 문장을 입력하세요.';
+      input.value = this.sampleText;
+
+      let isComposing = false;
+      input.addEventListener('compositionstart', () => {
+        isComposing = true;
       });
-    });
-    input.addEventListener('input', (e) => {
-      if (!isComposing) {
-        this.sampleText = e.target.value;
-        this._renderPreview();
-      }
-    });
+      input.addEventListener('compositionend', (event) => {
+        isComposing = false;
+        requestAnimationFrame(() => {
+          this.sampleText = event.target.value;
+          this._renderPreview();
+        });
+      });
+      input.addEventListener('input', (event) => {
+        if (!isComposing) {
+          this.sampleText = event.target.value;
+          this._renderPreview();
+        }
+      });
 
-    inputArea.appendChild(input);
-    this.container.appendChild(inputArea);
+      inputArea.appendChild(input);
+      this.container.appendChild(inputArea);
+      this.previewInput = input;
+    }
 
-    // 미리보기 캔버스
-    const canvasWrap = document.createElement('div');
-    canvasWrap.className = 'preview-canvas-wrap';
+    if (this.showBrowser) {
+      const browserSection = document.createElement('section');
+      browserSection.className = 'preview-browser';
+      browserSection.innerHTML = `
+        <div class="preview-browser-toolbar">
+          <span class="preview-browser-title">11172 Glyph Browser</span>
+          <div class="preview-browser-nav">
+            <button type="button" class="tool-btn preview-browser-btn" data-nav="prev">Prev</button>
+            <span class="preview-browser-page"></span>
+            <button type="button" class="tool-btn preview-browser-btn" data-nav="next">Next</button>
+          </div>
+          <div class="preview-browser-search">
+            <input type="text" class="preview-browser-input" maxlength="1" placeholder="한" />
+            <button type="button" class="tool-btn preview-browser-btn preview-browser-find">Find</button>
+          </div>
+        </div>
+        <div class="preview-browser-grid"></div>
+      `;
+      this.container.appendChild(browserSection);
 
-    this.previewCanvas = document.createElement('canvas');
-    this.previewCanvas.className = 'preview-canvas';
-    canvasWrap.appendChild(this.previewCanvas);
-    this.container.appendChild(canvasWrap);
+      this.browserGrid = browserSection.querySelector('.preview-browser-grid');
+      this.browserPageLabel = browserSection.querySelector('.preview-browser-page');
+      this.browserInput = browserSection.querySelector('.preview-browser-input');
 
-    this._setupCanvas();
+      browserSection.querySelector('[data-nav="prev"]').addEventListener('click', () => {
+        if (this.browserPage > 0) {
+          this.browserPage -= 1;
+          this._renderBrowser();
+        }
+      });
+      browserSection.querySelector('[data-nav="next"]').addEventListener('click', () => {
+        const maxPage = Math.max(Math.ceil(this._getAllSyllables().length / this.browserPageSize) - 1, 0);
+        if (this.browserPage < maxPage) {
+          this.browserPage += 1;
+          this._renderBrowser();
+        }
+      });
+      browserSection.querySelector('.preview-browser-find').addEventListener('click', () => {
+        this._findBrowserChar();
+      });
+      this.browserInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          this._findBrowserChar();
+        }
+      });
+    }
+
+    if (this.showPreviewCanvas) {
+      const canvasWrap = document.createElement('div');
+      canvasWrap.className = 'preview-canvas-wrap';
+
+      this.previewCanvas = document.createElement('canvas');
+      this.previewCanvas.className = 'preview-canvas';
+      canvasWrap.appendChild(this.previewCanvas);
+      this.container.appendChild(canvasWrap);
+
+      this._setupCanvas();
+    }
+
+    this._renderPreview();
+    this._renderBrowser();
   }
 
   _setupCanvas() {
+    if (!this.previewCanvas) return;
+
     const dpr = window.devicePixelRatio || 1;
     const wrap = this.previewCanvas.parentElement;
     const rect = wrap.getBoundingClientRect();
@@ -70,20 +135,142 @@ export class PreviewPanel {
     const h = rect.height || 120;
     this.previewCanvas.width = w * dpr;
     this.previewCanvas.height = h * dpr;
-    this.previewCanvas.style.width = w + 'px';
-    this.previewCanvas.style.height = h + 'px';
+    this.previewCanvas.style.width = `${w}px`;
+    this.previewCanvas.style.height = `${h}px`;
     this.pCtx = this.previewCanvas.getContext('2d');
     this.pCtx.scale(dpr, dpr);
     this.pW = w;
     this.pH = h;
   }
 
-  /**
-   * 자모 라이브러리 업데이트
-   */
   updateJamoLib(jamoLib) {
     this.jamoLib = jamoLib;
     this._renderPreview();
+    this._renderBrowser();
+  }
+
+  updateSyllableImports(syllableImports = {}) {
+    this.syllableImports = syllableImports;
+    this.importImageCache.clear();
+    Object.entries(this.syllableImports).forEach(([char, imported]) => {
+      if (!imported?.imageSrc) return;
+      const image = new Image();
+      image.src = imported.imageSrc;
+      image.onload = () => this._renderPreview();
+      this.importImageCache.set(char, image);
+    });
+    this._renderPreview();
+    this._renderBrowser();
+  }
+
+  _getAllSyllables() {
+    if (!this.allSyllables) {
+      this.allSyllables = [];
+      for (let cho = 0; cho < CHO.length; cho++) {
+        for (let jung = 0; jung < JUNG.length; jung++) {
+          for (let jong = 0; jong < JONG.length; jong++) {
+            this.allSyllables.push(compose(cho, jung, jong));
+          }
+        }
+      }
+    }
+
+    return this.allSyllables;
+  }
+
+  _findBrowserChar() {
+    const value = this.browserInput?.value.trim();
+    if (!value) return;
+
+    const index = this._getAllSyllables().indexOf(value);
+    if (index < 0) {
+      this.options.onInvalidLocateChar?.(value);
+      return;
+    }
+
+    this.browserSelectedChar = value;
+    this.browserPage = Math.floor(index / this.browserPageSize);
+    this._renderBrowser();
+  }
+
+  _renderBrowser() {
+    if (!this.browserGrid || !this.browserPageLabel) return;
+
+    const chars = this._getAllSyllables();
+    const totalPages = Math.max(Math.ceil(chars.length / this.browserPageSize), 1);
+    this.browserPage = Math.min(this.browserPage, totalPages - 1);
+
+    const start = this.browserPage * this.browserPageSize;
+    const pageChars = chars.slice(start, start + this.browserPageSize);
+
+    if (!pageChars.includes(this.browserSelectedChar)) {
+      this.browserSelectedChar = pageChars[0] ?? '가';
+    }
+
+    this.browserPageLabel.textContent = `${this.browserPage + 1}/${totalPages}`;
+    this.browserGrid.innerHTML = '';
+
+    pageChars.forEach((char) => {
+      const imported = this.syllableImports?.[char];
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `preview-browser-card ${char === this.browserSelectedChar ? 'active' : ''} ${imported ? 'has-import' : ''}`;
+      button.title = char;
+      let visualNode;
+      if (imported?.imageSrc) {
+        const image = document.createElement('img');
+        image.className = 'preview-browser-import-image';
+        image.alt = `${char} imported source`;
+        image.src = imported.imageSrc;
+        visualNode = image;
+      } else {
+        const canvas = document.createElement('canvas');
+        const size = 48;
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = size * dpr;
+        canvas.height = size * dpr;
+        canvas.style.width = `${size}px`;
+        canvas.style.height = `${size}px`;
+
+        const ctx = canvas.getContext('2d');
+        ctx.scale(dpr, dpr);
+
+        const info = decompose(char);
+        if (info) {
+          const commands = composeSyllable(info.cho, info.jung, info.jong, this.jamoLib);
+          this._drawCommands(ctx, commands, 0, 0, size);
+        }
+        visualNode = canvas;
+      }
+
+      const label = document.createElement('span');
+      label.className = 'preview-browser-char';
+      label.textContent = char;
+
+      button.appendChild(visualNode);
+      if (imported?.imageSrc) {
+        const badge = document.createElement('span');
+        badge.className = 'preview-browser-badge';
+        badge.textContent = 'Imported';
+        button.appendChild(badge);
+      }
+      button.appendChild(label);
+      button.addEventListener('click', () => {
+        this.browserSelectedChar = char;
+        this.sampleText = char;
+        if (this.previewInput) {
+          this.previewInput.value = char;
+        }
+        this.options.onOpenGlyph?.(char, { imported: Boolean(imported?.imageSrc) });
+        this._renderPreview();
+        this._renderBrowser();
+      });
+      button.addEventListener('dblclick', () => {
+        this.options.onLocateChar?.(char);
+      });
+
+      this.browserGrid.appendChild(button);
+    });
   }
 
   _renderPreview() {
@@ -105,9 +292,14 @@ export class PreviewPanel {
 
       if (char === ' ') continue;
 
+      const imported = this.syllableImports?.[char];
+      if (imported?.imageSrc) {
+        this._drawImportedPreview(ctx, char, x, startY, cellSize);
+        continue;
+      }
+
       const info = decompose(char);
       if (!info) {
-        // 한글이 아닌 문자 — 시스템 폰트로 그리기
         ctx.save();
         ctx.font = `${cellSize * 0.7}px "Pretendard", sans-serif`;
         ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
@@ -118,18 +310,41 @@ export class PreviewPanel {
         continue;
       }
 
-      // 음절 조합 Path 가져오기
       const commands = composeSyllable(info.cho, info.jung, info.jong, this.jamoLib);
       if (commands.length === 0) {
-        // 커맨드 없으면 빈 박스
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
         ctx.lineWidth = 1;
         ctx.strokeRect(x, startY, cellSize, cellSize);
         continue;
       }
 
-      // Path 렌더링 (1000 UPM → cellSize 스케일)
       this._drawCommands(ctx, commands, x, startY, cellSize);
+    }
+  }
+
+  _drawImportedPreview(ctx, char, x, y, size) {
+    let image = this.importImageCache.get(char);
+    if (!image) {
+      const imported = this.syllableImports?.[char];
+      if (!imported?.imageSrc) return;
+      image = new Image();
+      image.src = imported.imageSrc;
+      image.onload = () => this._renderPreview();
+      this.importImageCache.set(char, image);
+    }
+
+    if (image.complete && image.naturalWidth > 0) {
+      const scale = Math.min(size / image.naturalWidth, size / image.naturalHeight);
+      const drawWidth = image.naturalWidth * scale;
+      const drawHeight = image.naturalHeight * scale;
+      const drawX = x + (size - drawWidth) / 2;
+      const drawY = y + (size - drawHeight) / 2;
+      ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+    } else {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+      ctx.strokeRect(x, y, size, size);
+      ctx.restore();
     }
   }
 
@@ -172,7 +387,11 @@ export class PreviewPanel {
   }
 
   resize() {
-    this._setupCanvas();
+    if (this.previewCanvas) {
+      this._setupCanvas();
+    }
     this._renderPreview();
+    this._renderBrowser();
   }
 }
+

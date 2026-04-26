@@ -1,17 +1,28 @@
-/**
- * main.js — Fontto 앱 진입점
- *
- * 스텝 기반 플로우:
- *   1. 랜딩 → 2. 자모 입력 → 3. 미리보기 & 설정 → 4. 생성 & 다운로드
+﻿/**
+ * main.js ??Fontto ??吏꾩엯?? *
+ * ?ㅽ뀦 湲곕컲 ?뚮줈??
+ *   1. ?쒕뵫 ??2. ?먮え ?낅젰 ??3. 誘몃━蹂닿린 & ?ㅼ젙 ??4. ?앹꽦 & ?ㅼ슫濡쒕뱶
  */
 
 import './index.css';
 import { DrawingCanvas } from './ui/drawing-canvas.js';
-import { JamoGrid, CATEGORIES, REQUIRED_JAMO_COUNT } from './ui/jamo-grid.js';
+import { JamoGrid, CATEGORIES, REQUIRED_JAMO_COUNT, buildGuideMeta } from './ui/jamo-grid.js';
 import { PreviewPanel } from './ui/preview-panel.js';
 import { Toolbar } from './ui/toolbar.js';
 import { generateFont, downloadFont } from './core/font-generator.js';
 import { deriveAll } from './core/jamo-derive.js';
+import {
+  buildTemplateSvg,
+  getTemplateSlots,
+  getTemplateMetrics,
+  getTemplateCellRect,
+  getTemplateImportRect,
+  rasterRectToCommands,
+  extractRasterComponents,
+  rasterRectToCleanImageData,
+  selectedComponentsToCommands,
+  selectedComponentsToStrokes,
+} from './core/template-import.js';
 import {
   CHO,
   JUNG,
@@ -26,6 +37,7 @@ import {
 const STORAGE_KEY = 'fontto-jamo-lib-v1';
 const DRAFT_STORAGE_KEY = 'fontto-jamo-drafts-v1';
 const GUIDE_BOX_STORAGE_KEY = 'fontto-guide-boxes-v1';
+const SYLLABLE_IMPORT_STORAGE_KEY = 'fontto-syllable-imports-v1';
 const RECENT_REVIEW_LIMIT = 8;
 const COMMON_REVIEW_CHARS = [
   '\uAC00', '\uB098', '\uB2E4', '\uB77C', '\uB9C8', '\uBC14', '\uC0AC', '\uC544',
@@ -36,9 +48,10 @@ const COMMON_REVIEW_CHARS = [
 class FonttoApp {
   jamoDrafts = {};
   guideOverrides = {};
+  syllableImports = {};
 
   constructor() {
-    this.jamoLib = {};        // 자모 Path 커맨드 라이브러리
+    this.jamoLib = {};
     this.currentStep = 'landing'; // 'landing' | 'editor' | 'preview' | 'generate'
     this.reviewState = this._getDefaultReviewState();
     this.reviewReturnContext = null;
@@ -59,9 +72,9 @@ class FonttoApp {
     window.addEventListener('resize', () => this._handleResize());
   }
 
-  // ════════════════════════════════════════════
-  //  Step 1: 랜딩 페이지
-  // ════════════════════════════════════════════
+  // ?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧
+  //  Step 1: ?쒕뵫 ?섏씠吏
+  // ?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧
   _showLanding() {
     this.currentStep = 'landing';
     const app = document.getElementById('app');
@@ -117,6 +130,7 @@ class FonttoApp {
             <span class="current-jamo-label" id="currentJamoLabel">Select a guided task.</span>
           </div>
           <div class="header-right">
+            <button class="header-btn" id="templateBtn">Template</button>
             <button class="header-btn is-hidden" id="returnToReviewBtn">Back to Full Set Review</button>
             <button class="header-btn" id="reviewBtn" disabled>Review Full Set</button>
             <button class="header-btn" id="previewBtn">Preview</button>
@@ -134,6 +148,8 @@ class FonttoApp {
           <div class="quality-panel" id="qualityPanel"></div>
         </main>
 
+        <aside class="editor-browser-area" id="browserContainer"></aside>
+
         <footer class="editor-footer" id="previewContainer"></footer>
       </div>
     `;
@@ -141,7 +157,7 @@ class FonttoApp {
     this._initEditor();
   }
   _initEditor() {
-    // 드로잉 캔버스 초기화
+    // Initialize drawing canvas
     const canvasEl = document.getElementById('drawingCanvas');
     this.drawingCanvas = new DrawingCanvas(canvasEl, {
       penSize: 8,
@@ -149,19 +165,42 @@ class FonttoApp {
       onGuideRegionChange: (region) => this._handleGuideRegionChange(region),
     });
 
-    // 자모 그리드 초기화
+    // Initialize jamo grid
     const gridContainer = document.getElementById('jamoGridContainer');
     this.jamoGrid = new JamoGrid(gridContainer, (catId, jamo, example, guide) => {
       this._onJamoSelect(catId, jamo, example, guide);
+    }, {
+      onLocateChar: (char) => this._jumpToGlyphEdit(char),
+      onInvalidLocateChar: () => this._showToast('가, 한 같은 한글 음절 한 글자를 입력하세요.', 'warning', 2600),
     });
     this.jamoGrid.setCompletedMap(this._getCompletedMapFromLib());
 
-    // 미리보기 패널 초기화
+    // Initialize preview panel
     const previewContainer = document.getElementById('previewContainer');
-    this.previewPanel = new PreviewPanel(previewContainer);
+    this.previewPanel = new PreviewPanel(previewContainer, {
+      showBrowser: false,
+      onLocateChar: (char) => this._jumpToGlyphEdit(char),
+      onEditImportedChar: (char) => this._showSyllableSplitModal(char),
+      onOpenGlyph: (char, meta) => this._handleGlyphCardOpen(char, meta),
+      onInvalidLocateChar: () => this._showToast('That glyph is outside the Hangul syllable set.', 'warning', 2600),
+    });
     this.previewPanel.updateJamoLib(deriveAll(this.jamoLib));
+    this.previewPanel.updateSyllableImports(this.syllableImports);
 
-    // 툴바 초기화
+    const browserContainer = document.getElementById('browserContainer');
+    this.browserPanel = new PreviewPanel(browserContainer, {
+      showPreviewInput: false,
+      showPreviewCanvas: false,
+      showBrowser: true,
+      onLocateChar: (char) => this._jumpToGlyphEdit(char),
+      onEditImportedChar: (char) => this._showSyllableSplitModal(char),
+      onOpenGlyph: (char, meta) => this._handleGlyphCardOpen(char, meta),
+      onInvalidLocateChar: () => this._showToast('That glyph is outside the Hangul syllable set.', 'warning', 2600),
+    });
+    this.browserPanel.updateJamoLib(deriveAll(this.jamoLib));
+    this.browserPanel.updateSyllableImports(this.syllableImports);
+
+    // Initialize toolbar
     const toolbarContainer = document.getElementById('toolbarContainer');
     this.toolbar = new Toolbar(toolbarContainer, {
       onUndo: () => this.drawingCanvas.undo(),
@@ -169,15 +208,35 @@ class FonttoApp {
       onClear: () => this.drawingCanvas.clear(),
       onPenSize: (size) => this.drawingCanvas.setPenSize(size),
       onVariableWidth: (v) => this.drawingCanvas.setVariableWidth(v),
-      onToggleGuideEdit: (enabled) => this.drawingCanvas.setGuideEditMode(enabled),
+      onToggleGuideEdit: (enabled) => {
+        this.drawingCanvas.setGuideEditMode(enabled);
+        if (enabled) this.toolbar.setStrokeSelectMode(false);
+      },
+      onToggleStrokeSelect: (enabled) => {
+        this.drawingCanvas.setStrokeSelectMode(enabled);
+        if (enabled) this.toolbar.setGuideEditMode(false);
+      },
+      onKeepSelectedStrokes: () => this.drawingCanvas.keepSelectedStrokes(),
+      onDeleteSelectedStrokes: () => this.drawingCanvas.deleteSelectedStrokes(),
+      onSelectAllStrokes: () => this.drawingCanvas.selectAllStrokes(),
+      onClearStrokeSelection: () => this.drawingCanvas.clearStrokeSelection(),
+      onDuplicateSelectedStrokes: () => this.drawingCanvas.duplicateSelectedStrokes(),
+      onNudgeSelectedStrokes: (dx, dy) => this.drawingCanvas.nudgeSelectedStrokes(dx, dy),
+      onRotateSelectedStrokes: (degrees) => this.drawingCanvas.rotateSelectedStrokes(degrees),
+      onScaleSelectedStrokes: (scaleX, scaleY) => this.drawingCanvas.scaleSelectedStrokes(scaleX, scaleY),
+      onBringSelectedToFront: () => this.drawingCanvas.bringSelectedToFront(),
+      onSendSelectedToBack: () => this.drawingCanvas.sendSelectedToBack(),
       onResetGuideBox: () => this._resetGuideRegionForCurrentSelection(),
       onSave: () => this._saveCurrentJamo(),
       onNext: () => this._saveAndNext(),
     });
 
-    // 버튼 이벤트
+    // Button events
     document.getElementById('previewBtn').addEventListener('click', () => {
       this._showPreviewModal();
+    });
+    document.getElementById('templateBtn').addEventListener('click', () => {
+      this._showTemplateModal();
     });
     document.getElementById('reviewBtn').addEventListener('click', () => {
       this._showReviewModal();
@@ -189,7 +248,7 @@ class FonttoApp {
       this._showGenerateModal();
     });
 
-    // 첫 번째 자모 자동 선택
+    // 泥?踰덉㎏ ?먮え ?먮룞 ?좏깮
     this._checkGenerateReady();
     this._updateReturnToReviewButton();
     this.jamoGrid.goToNext();
@@ -209,12 +268,50 @@ class FonttoApp {
     const draft = this.jamoDrafts[key];
     if (draft?.strokes?.length) {
       this.drawingCanvas.loadStrokes(draft.strokes);
+    } else if (draft?.importedStrokes?.length) {
+      this.drawingCanvas.loadStrokes(draft.importedStrokes);
     } else {
       this.drawingCanvas.clear();
     }
     this.drawingCanvas.setGuide(this._applyGuideOverride(catId, key, guide ?? { char: example }));
     this._updateQualityPanel(this.drawingCanvas.getQualityReport());
   }
+
+  _jumpToGlyphEdit(char) {
+    const info = this._decomposeChar(char);
+    if (!info) {
+      this._showToast('가, 한 같은 한글 음절 한 글자를 입력하세요.', 'warning', 2600);
+      return;
+    }
+
+    const targets = this._getEditTargetsForSyllable(info.cho, info.jung, info.jong);
+    const primaryTarget = targets[0];
+    if (!primaryTarget) return;
+
+    this.reviewReturnContext = {
+      selectedChar: char,
+      state: {
+        ...this.reviewState,
+        mode: 'all',
+        comboQuery: '',
+        selectedChar: char,
+        page: Math.floor((char.charCodeAt(0) - 0xAC00) / this.reviewState.pageSize),
+      },
+    };
+    this.reviewState = { ...this.reviewReturnContext.state };
+    this._updateReturnToReviewButton();
+    this.jamoGrid.selectItem(primaryTarget.categoryId, primaryTarget.jamo);
+    this._showToast(`Jumped to ${char} -> ${primaryTarget.label}`, 'success', 2200);
+  }
+
+  _handleGlyphCardOpen(char, meta = {}) {
+    if (meta.imported || this.syllableImports?.[char]?.imageSrc) {
+      this._showSyllableSplitModal(char);
+      return;
+    }
+    this._jumpToGlyphEdit(char);
+  }
+
   _saveCurrentJamo(options = {}) {
     const sel = this.jamoGrid.getCurrentSelection();
     if (!sel) return false;
@@ -245,6 +342,9 @@ class FonttoApp {
 
     const fullLib = deriveAll(this.jamoLib);
     this.previewPanel.updateJamoLib(fullLib);
+    if (this.browserPanel) this.browserPanel.updateJamoLib(fullLib);
+    this.previewPanel.updateSyllableImports(this.syllableImports);
+    if (this.browserPanel) this.browserPanel.updateSyllableImports(this.syllableImports);
     this._persistJamoLib();
 
     this._checkGenerateReady();
@@ -282,8 +382,8 @@ class FonttoApp {
     }
 
     if (btn) {
-      // 최소 초성 세로 1개 + 중성 1개가 있으면 활성화 (테스트용)
-      // 실제론 62자 전부 완료해야 함
+      // 理쒖냼 珥덉꽦 ?몃줈 1媛?+ 以묒꽦 1媛쒓? ?덉쑝硫??쒖꽦??(?뚯뒪?몄슜)
+      // Full review and export should stay locked until all required inputs are complete.
       const keys = Object.keys(this.jamoLib);
       btn.disabled = !completed;
     }
@@ -716,7 +816,7 @@ class FonttoApp {
         ? (vowelCategory === 'vertical' ? 'cho_v_wf' : 'cho_h_wf')
         : (vowelCategory === 'vertical' ? 'cho_v' : 'cho_h'),
       jamo: choInfo.base,
-      label: `초성 ${choInfo.base} 수정`,
+      label: `초성 ${choInfo.base} 적용`,
     });
 
     const jungItems = jungInfo.isCompound && jungInfo.components
@@ -727,7 +827,7 @@ class FonttoApp {
       targets.push({
         categoryId: jongIdx > 0 ? 'jung_wb' : 'jung_nb',
         jamo,
-        label: `중성 ${jamo} 수정${jungItems.length > 1 ? ` ${index + 1}` : ''}`,
+        label: `중성 ${jamo} 적용${jungItems.length > 1 ? ` ${index + 1}` : ''}`,
       });
     });
 
@@ -736,7 +836,7 @@ class FonttoApp {
         targets.push({
           categoryId: vowelCategory === 'horizontal' ? 'jong_cluster_h' : 'jong_cluster',
           jamo: jongInfo.base,
-          label: `복합 종성 ${jongInfo.base} 수정`,
+          label: `겹받침 ${jongInfo.base} 적용`,
         });
 
         return targets.filter((target, index, array) => {
@@ -752,7 +852,7 @@ class FonttoApp {
         targets.push({
           categoryId: vowelCategory === 'horizontal' ? 'jong_h' : 'jong',
           jamo,
-          label: `Final ${jamo} edit${jongItems.length > 1 ? ` ${index + 1}` : ''}`,
+          label: `종성 ${jamo} 적용${jongItems.length > 1 ? ` ${index + 1}` : ''}`,
         });
       });
     }
@@ -762,8 +862,759 @@ class FonttoApp {
     });
   }
 
+  _showTemplateModal() {
+    const slots = getTemplateSlots();
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal template-modal">
+        <div class="modal-header">
+          <h2>Template Import</h2>
+          <button class="modal-close" id="closeTemplateModal">x</button>
+        </div>
+        <div class="modal-body template-body">
+          <p class="template-copy">Write the required source syllables on the template, upload it, then open each extracted card and assign only the parts you want to reuse.</p>
+          <div class="template-actions">
+            <button class="gen-btn" id="downloadTemplateBtn">Download PNG Template</button>
+            <label class="gen-btn template-upload-btn" for="templateFileInput">Upload Filled Template</label>
+            <input type="file" id="templateFileInput" accept="image/*" class="template-file-input" />
+          </div>
+          <div class="template-status" id="templateStatus">Template expects ${slots.length} source syllable boxes.</div>
+          <div class="template-import-review" id="templateImportReview">
+            <div class="template-target-empty">Upload a filled template to review extracted source syllables here.</div>
+          </div>
+          <div class="template-manual">
+            <div class="template-manual-header">
+              <h3>Advanced: Split One Syllable</h3>
+              <p>Use this only when you want to decompose one completed syllable manually by selecting stroke groups.</p>
+            </div>
+            <div class="template-manual-controls">
+              <input type="text" class="gen-input template-syllable-input" id="templateSyllableInput" maxlength="1" placeholder="한" />
+              <label class="gen-btn template-upload-btn" for="templateSingleFileInput">Upload Syllable Image</label>
+              <input type="file" id="templateSingleFileInput" accept="image/*" class="template-file-input" />
+              <button class="gen-btn" id="templateApplySelectionBtn" disabled>Apply Selected Parts</button>
+            </div>
+            <div class="template-status" id="templateManualStatus">Choose one Hangul syllable and an image containing only that syllable.</div>
+            <div class="template-manual-layout">
+              <canvas class="template-manual-canvas" id="templateManualCanvas" width="520" height="520"></canvas>
+              <div class="template-manual-sidebar">
+                <div class="template-target-list" id="templateTargetList"></div>
+                <div class="template-selection-summary" id="templateSelectionSummary">No image loaded.</div>
+              </div>
+            </div>
+          </div>
+          <details class="template-legacy">
+            <summary class="template-legacy-summary">Template preview</summary>
+            <div class="template-legacy-body">
+              <div class="template-preview-wrap">
+                <img alt="Template preview" class="template-preview-image" id="templatePreviewImage" />
+              </div>
+            </div>
+          </details>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    const manualState = {
+      char: '',
+      targets: [],
+      extracted: null,
+      image: null,
+      activeTargetIndex: 0,
+      assignments: new Map(),
+      selectedComponentIds: new Set(),
+      contextMenuEl: null,
+    };
+
+    document.getElementById('closeTemplateModal').addEventListener('click', close);
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) close();
+      this._hideManualContextMenu(manualState);
+    });
+
+    const previewImage = document.getElementById('templatePreviewImage');
+    previewImage.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(buildTemplateSvg(slots))}`;
+    const importReviewEl = document.getElementById('templateImportReview');
+
+    document.getElementById('downloadTemplateBtn').addEventListener('click', async () => {
+      await this._downloadTemplate(slots);
+    });
+
+    document.getElementById('templateFileInput').addEventListener('change', async (event) => {
+      const [file] = event.target.files ?? [];
+      if (!file) return;
+
+      const statusEl = document.getElementById('templateStatus');
+      statusEl.textContent = 'Importing template...';
+
+      try {
+        const summary = await this._importTemplateFile(file, slots);
+        statusEl.textContent = `Imported ${summary.imported} source syllables. Skipped ${summary.skipped} empty boxes.`;
+        this._renderTemplateImportReview(importReviewEl, summary.importedSlots, close);
+      } catch (error) {
+        console.error('Template import failed:', error);
+        statusEl.textContent = `Import failed: ${error.message}`;
+      }
+    });
+
+    const syllableInput = document.getElementById('templateSyllableInput');
+    const applyBtn = document.getElementById('templateApplySelectionBtn');
+    const manualStatus = document.getElementById('templateManualStatus');
+    const manualCanvas = document.getElementById('templateManualCanvas');
+    const targetList = document.getElementById('templateTargetList');
+    const selectionSummary = document.getElementById('templateSelectionSummary');
+
+    const renderManual = () => {
+      this._renderManualSplitState(manualCanvas, targetList, selectionSummary, manualState, renderManual);
+      applyBtn.disabled = !manualState.extracted || manualState.targets.every((_, index) => ![...manualState.assignments.values()].includes(index));
+    };
+
+    syllableInput.addEventListener('input', () => {
+      manualState.char = syllableInput.value.trim();
+      manualState.targets = this._getTargetsForManualSplit(manualState.char);
+      manualState.activeTargetIndex = 0;
+      manualState.assignments = new Map();
+      manualState.selectedComponentIds = new Set();
+      manualStatus.textContent = manualState.targets.length
+        ? 'Upload an image, click stroke groups to select them, then right-click to assign them.'
+        : '가, 한 같은 한글 음절 한 글자를 입력하세요.';
+      renderManual();
+    });
+
+    manualCanvas.addEventListener('click', (event) => {
+      if (!manualState.extracted) return;
+      const componentId = this._getManualComponentAtPoint(event, manualCanvas, manualState.extracted);
+      if (componentId === null) return;
+
+      this._toggleManualComponentSelection(manualState, componentId, event.shiftKey);
+      renderManual();
+    });
+
+    manualCanvas.addEventListener('contextmenu', (event) => {
+      this._handleManualCanvasContextMenu(event, manualCanvas, manualState, renderManual);
+    });
+
+    document.getElementById('templateSingleFileInput').addEventListener('change', async (event) => {
+      const [file] = event.target.files ?? [];
+      if (!file) return;
+      if (!manualState.targets.length) {
+        manualStatus.textContent = 'Enter the syllable first so Fontto knows which parts to save.';
+        return;
+      }
+
+      try {
+      const image = await this._readImageFile(file);
+      const extracted = this._extractManualSplitImage(image);
+      manualState.image = image;
+      manualState.imageSrc = file.type.startsWith('image/')
+        ? await this._readFileAsDataUrl(file)
+        : null;
+      manualState.extracted = extracted;
+        manualState.assignments = new Map();
+        manualState.selectedComponentIds = new Set();
+        manualStatus.textContent = `Detected ${extracted.components.length} stroke groups. Select groups, then right-click to assign them.`;
+        renderManual();
+      } catch (error) {
+        manualStatus.textContent = `Split failed: ${error.message}`;
+      }
+    });
+
+    applyBtn.addEventListener('click', () => {
+      const result = this._applyManualSplitAssignments(manualState);
+      manualStatus.textContent = `Applied ${result.applied} target${result.applied === 1 ? '' : 's'}.`;
+      renderManual();
+    });
+
+    renderManual();
+  }
+
+  async _showSyllableSplitModal(initialChar = '') {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal template-modal">
+        <div class="modal-header">
+          <h2>Edit Imported Syllable</h2>
+          <button class="modal-close" id="closeSyllableSplitModal">x</button>
+        </div>
+        <div class="modal-body template-body">
+          <div class="template-manual">
+            <div class="template-manual-header">
+              <h3>Split One Syllable</h3>
+              <p>Select the parts you want to reuse, then right-click to assign them to the matching initial, medial, or final target.</p>
+            </div>
+            <div class="template-manual-controls">
+              <input type="text" class="gen-input template-syllable-input" id="splitSyllableInput" maxlength="1" placeholder="한" value="${initialChar}" />
+              <label class="gen-btn template-upload-btn" for="splitSingleFileInput">Replace Image</label>
+              <input type="file" id="splitSingleFileInput" accept="image/*" class="template-file-input" />
+              <button class="gen-btn" id="splitApplySelectionBtn" disabled>Apply Selected Parts</button>
+            </div>
+            <div class="template-status" id="splitManualStatus">Load or replace the syllable image, then assign its parts.</div>
+            <div class="template-manual-layout">
+              <canvas class="template-manual-canvas" id="splitManualCanvas" width="520" height="520"></canvas>
+              <div class="template-manual-sidebar">
+                <div class="template-target-list" id="splitTargetList"></div>
+                <div class="template-selection-summary" id="splitSelectionSummary">No image loaded.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    document.getElementById('closeSyllableSplitModal').addEventListener('click', close);
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) close();
+      this._hideManualContextMenu(state);
+    });
+
+    const state = {
+      char: initialChar,
+      targets: this._getTargetsForManualSplit(initialChar),
+      extracted: null,
+      image: null,
+      imageSrc: this.syllableImports?.[initialChar]?.imageSrc ?? null,
+      activeTargetIndex: 0,
+      assignments: new Map(),
+      selectedComponentIds: new Set(),
+      contextMenuEl: null,
+    };
+
+    const syllableInput = document.getElementById('splitSyllableInput');
+    const applyBtn = document.getElementById('splitApplySelectionBtn');
+    const manualStatus = document.getElementById('splitManualStatus');
+    const manualCanvas = document.getElementById('splitManualCanvas');
+    const targetList = document.getElementById('splitTargetList');
+    const selectionSummary = document.getElementById('splitSelectionSummary');
+
+    const render = () => {
+      this._renderManualSplitState(manualCanvas, targetList, selectionSummary, state, render);
+      applyBtn.disabled = !state.extracted || state.targets.every((_, index) => ![...state.assignments.values()].includes(index));
+    };
+
+    const loadImageIntoState = async (src) => {
+      const image = await this._readImageSource(src);
+      state.image = image;
+      state.imageSrc = src;
+      state.extracted = this._extractManualSplitImage(image);
+      state.assignments = new Map();
+      state.selectedComponentIds = new Set();
+      manualStatus.textContent = `Detected ${state.extracted.components.length} stroke groups. Select groups, then right-click to assign them.`;
+      render();
+    };
+
+    syllableInput.addEventListener('input', async () => {
+      state.char = syllableInput.value.trim();
+      state.targets = this._getTargetsForManualSplit(state.char);
+      state.activeTargetIndex = 0;
+      state.assignments = new Map();
+      state.selectedComponentIds = new Set();
+      if (!state.targets.length) {
+        state.extracted = null;
+        manualStatus.textContent = '가, 한 같은 한글 음절 한 글자를 입력하세요.';
+        render();
+        return;
+      }
+      if (state.imageSrc) {
+        await loadImageIntoState(state.imageSrc);
+      } else {
+        manualStatus.textContent = 'Replace the image or pick one imported glyph card from the browser.';
+        render();
+      }
+    });
+
+    manualCanvas.addEventListener('click', (event) => {
+      if (!state.extracted) return;
+      const componentId = this._getManualComponentAtPoint(event, manualCanvas, state.extracted);
+      if (componentId === null) return;
+      this._toggleManualComponentSelection(state, componentId, event.shiftKey);
+      render();
+    });
+
+    manualCanvas.addEventListener('contextmenu', (event) => {
+      this._handleManualCanvasContextMenu(event, manualCanvas, state, render);
+    });
+
+    document.getElementById('splitSingleFileInput').addEventListener('change', async (event) => {
+      const [file] = event.target.files ?? [];
+      if (!file) return;
+      if (!this._getTargetsForManualSplit(state.char).length) {
+        manualStatus.textContent = 'Enter the syllable first so Fontto knows where to save the parts.';
+        return;
+      }
+      const src = await this._readFileAsDataUrl(file);
+      await loadImageIntoState(src);
+    });
+
+    applyBtn.addEventListener('click', () => {
+      const result = this._applyManualSplitAssignments(state);
+      manualStatus.textContent = `Applied ${result.applied} target${result.applied === 1 ? '' : 's'}.`;
+      render();
+    });
+
+    if (state.char && state.imageSrc && state.targets.length) {
+      try {
+        await loadImageIntoState(state.imageSrc);
+      } catch (error) {
+        manualStatus.textContent = `Failed to load imported image: ${error.message}`;
+      }
+    } else {
+      render();
+    }
+  }
+
+  async _downloadTemplate(slots) {
+    const svg = buildTemplateSvg(slots);
+    const metrics = getTemplateMetrics(slots.length);
+    const svgUrl = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }));
+    const image = await this._readImageSource(svgUrl);
+    const canvas = document.createElement('canvas');
+    canvas.width = metrics.width;
+    canvas.height = metrics.height;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#f3f5fb';
+    ctx.fillRect(0, 0, metrics.width, metrics.height);
+    ctx.drawImage(image, 0, 0, metrics.width, metrics.height);
+
+    const url = canvas.toDataURL('image/png');
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'fontto-template.png';
+    link.click();
+    URL.revokeObjectURL(svgUrl);
+  }
+
+  async _importTemplateFile(file, slots) {
+    const image = await this._readImageFile(file);
+    const metrics = getTemplateMetrics(slots.length);
+    this._validateTemplateImage(image, metrics);
+    const canvas = document.createElement('canvas');
+    canvas.width = metrics.width;
+    canvas.height = metrics.height;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, metrics.width, metrics.height);
+    ctx.drawImage(image, 0, 0, metrics.width, metrics.height);
+
+    let imported = 0;
+    let skipped = 0;
+    const importedSlots = [];
+    const importedByChar = new Map();
+
+    slots.forEach((slot, index) => {
+      const cellRect = getTemplateCellRect(index, metrics);
+      const importRect = getTemplateImportRect(cellRect, metrics);
+      const imageData = ctx.getImageData(importRect.x, importRect.y, importRect.w, importRect.h);
+      const commands = rasterRectToCommands(imageData);
+
+      if (commands.length === 0) {
+        skipped += 1;
+        return;
+      }
+
+      const cleanImageData = rasterRectToCleanImageData(imageData);
+      const imageSrc = this._createImageDataUrl(cleanImageData);
+      this.syllableImports[slot.example] = { imageSrc };
+
+      if (!importedByChar.has(slot.example)) {
+        importedByChar.set(slot.example, {
+          char: slot.example,
+          sourceJamo: slot.jamo,
+          categoryId: slot.categoryId,
+          categoryLabel: slot.categoryLabel,
+          imageSrc,
+          targets: this._getTargetsForManualSplit(slot.example),
+        });
+        imported += 1;
+      }
+    });
+
+    importedSlots.push(...importedByChar.values());
+    this.previewPanel.updateSyllableImports(this.syllableImports);
+    if (this.browserPanel) this.browserPanel.updateSyllableImports(this.syllableImports);
+    this._persistJamoLib();
+    this._showToast(`Template import complete: ${imported} source syllables`, imported > 0 ? 'success' : 'warning', 3200);
+
+    return { imported, skipped, importedSlots };
+  }
+
+  _renderTemplateImportReview(container, importedSlots, closeModal) {
+    if (!container) return;
+
+    if (!importedSlots?.length) {
+      container.innerHTML = '<div class="template-target-empty">No source syllables were extracted from the uploaded template.</div>';
+      return;
+    }
+
+    container.innerHTML = `
+      <div class="template-import-review-header">
+        <h3>Extracted Source Syllables</h3>
+        <p>Click a card to split it, then right-click the selected strokes to apply the needed part to the matching jamo slots.</p>
+      </div>
+      <div class="template-import-review-grid"></div>
+    `;
+
+    const grid = container.querySelector('.template-import-review-grid');
+    importedSlots.forEach((slot) => {
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'template-import-card';
+      const image = document.createElement('img');
+      image.className = 'template-import-card-image';
+      image.alt = `${slot.char} source`;
+      image.src = slot.imageSrc;
+
+      const title = document.createElement('span');
+      title.className = 'template-import-card-title';
+      title.textContent = slot.char;
+
+      const subtitle = document.createElement('span');
+      subtitle.className = 'template-import-card-subtitle';
+      subtitle.textContent = `${slot.sourceJamo} -> ${slot.targets.map((target) => target.label).join(' / ')}`;
+
+      card.appendChild(image);
+      card.appendChild(title);
+      card.appendChild(subtitle);
+      card.addEventListener('click', () => {
+        this._showSyllableSplitModal(slot.char);
+        closeModal?.();
+        this._showToast(`Opened ${slot.char} for part assignment.`, 'success', 2200);
+      });
+
+      grid.appendChild(card);
+    });
+  }
+
+  _readImageFile(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('Failed to read the template file.'));
+      reader.onload = () => {
+        this._readImageSource(reader.result).then(resolve).catch(reject);
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  _readFileAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('Failed to read the image file.'));
+      reader.onload = () => resolve(reader.result);
+      reader.readAsDataURL(file);
+    });
+  }
+
+  _readImageSource(src) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('Unsupported image file.'));
+      img.src = src;
+    });
+  }
+
+  _createImageDataUrl(imageData) {
+    const canvas = document.createElement('canvas');
+    canvas.width = imageData.width;
+    canvas.height = imageData.height;
+    const ctx = canvas.getContext('2d');
+    ctx.putImageData(imageData, 0, 0);
+    return canvas.toDataURL('image/png');
+  }
+
+  _validateTemplateImage(image, metrics) {
+    const expectedRatio = metrics.width / metrics.height;
+    const actualRatio = image.width / image.height;
+    const ratioDelta = Math.abs(actualRatio - expectedRatio) / expectedRatio;
+
+    if (ratioDelta > 0.08) {
+      throw new Error('This image does not match the Fontto template layout. Please upload the downloaded template PNG, not a browser screenshot.');
+    }
+
+    if (image.width < metrics.width * 0.65 || image.height < metrics.height * 0.65) {
+      throw new Error('Template image is too small. Export or scan the sheet at a higher resolution.');
+    }
+  }
+
+  _getTargetsForManualSplit(char) {
+    const info = this._decomposeChar(char);
+    if (!info) return [];
+    return this._getEditTargetsForSyllable(info.cho, info.jung, info.jong);
+  }
+
+  _extractManualSplitImage(image) {
+    const size = 520;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.clearRect(0, 0, size, size);
+
+    const scale = Math.min((size - 40) / image.width, (size - 40) / image.height);
+    const drawWidth = image.width * scale;
+    const drawHeight = image.height * scale;
+    const x = (size - drawWidth) / 2;
+    const y = (size - drawHeight) / 2;
+    ctx.drawImage(image, x, y, drawWidth, drawHeight);
+
+    const imageData = ctx.getImageData(0, 0, size, size);
+    const extracted = extractRasterComponents(imageData);
+    if (extracted.components.length === 0) {
+      throw new Error('No stroke groups were detected in the uploaded image.');
+    }
+
+    return extracted;
+  }
+
+  _renderManualSplitState(canvas, targetList, selectionSummary, state, rerender) {
+    this._renderManualTargetList(targetList, state, rerender);
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#0f1018';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    if (!state.extracted) {
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      ctx.font = '14px "Noto Sans KR", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('Upload one syllable image to start manual split.', canvas.width / 2, canvas.height / 2);
+      selectionSummary.textContent = 'No image loaded.';
+      return;
+    }
+
+    const imageData = new ImageData(state.extracted.width, state.extracted.height);
+    imageData.data.fill(0);
+    state.extracted.components.forEach((component) => {
+      const assignedTarget = state.assignments.get(component.id);
+      const isAssigned = assignedTarget !== undefined;
+      const isSelected = state.selectedComponentIds?.has(component.id);
+      const fill = isSelected
+        ? [255, 184, 77, 255]
+        : isAssigned
+          ? [0, 212, 170, 255]
+          : [255, 255, 255, 255];
+      component.pixels.forEach((pixelIndex) => {
+        const idx = pixelIndex * 4;
+        imageData.data[idx] = fill[0];
+        imageData.data[idx + 1] = fill[1];
+        imageData.data[idx + 2] = fill[2];
+        imageData.data[idx + 3] = fill[3];
+      });
+    });
+    ctx.putImageData(imageData, 0, 0);
+
+    state.extracted.components.forEach((component) => {
+      const assignedTarget = state.assignments.get(component.id);
+      const isSelected = state.selectedComponentIds?.has(component.id);
+      ctx.strokeStyle = isSelected
+        ? 'rgba(255, 184, 77, 0.95)'
+        : assignedTarget !== undefined
+          ? 'rgba(0, 212, 170, 0.85)'
+          : 'rgba(255,255,255,0.18)';
+      ctx.lineWidth = isSelected || assignedTarget !== undefined ? 2 : 1;
+      ctx.strokeRect(
+        component.bounds.minX - 2,
+        component.bounds.minY - 2,
+        component.bounds.w + 4,
+        component.bounds.h + 4
+      );
+    });
+
+    const selectedCount = state.selectedComponentIds?.size ?? 0;
+    const totalAssigned = state.assignments.size;
+    selectionSummary.textContent = `${state.extracted.components.length} groups detected. ${selectedCount} groups selected. ${totalAssigned} groups assigned overall. Right-click the selected groups to assign them.`;
+  }
+
+  _renderManualTargetList(targetList, state, rerender) {
+    targetList.innerHTML = '';
+    if (!state.targets.length) {
+      targetList.innerHTML = '<div class="template-target-empty">Enter one Hangul syllable to create split targets.</div>';
+      return;
+    }
+
+    state.targets.forEach((target, index) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `tool-btn template-target-btn ${state.activeTargetIndex === index ? 'active' : ''}`;
+      const count = [...state.assignments.values()].filter((targetIndex) => targetIndex === index).length;
+      button.textContent = count > 0 ? `${target.label} (${count})` : target.label;
+      button.addEventListener('click', () => {
+        if (state.selectedComponentIds?.size) {
+          this._assignSelectedComponentsToTarget(state, index);
+        } else {
+          state.activeTargetIndex = index;
+        }
+        rerender?.();
+      });
+      button.addEventListener('contextmenu', (event) => {
+        event.preventDefault();
+        if (state.selectedComponentIds?.size) {
+          this._assignSelectedComponentsToTarget(state, index);
+          rerender?.();
+        }
+      });
+      targetList.appendChild(button);
+    });
+  }
+
+  _toggleManualComponentSelection(state, componentId, additive = false) {
+    if (!additive) {
+      if (state.selectedComponentIds.has(componentId) && state.selectedComponentIds.size === 1) {
+        state.selectedComponentIds.clear();
+        return;
+      }
+      state.selectedComponentIds = new Set([componentId]);
+      return;
+    }
+
+    if (state.selectedComponentIds.has(componentId)) {
+      state.selectedComponentIds.delete(componentId);
+    } else {
+      state.selectedComponentIds.add(componentId);
+    }
+  }
+
+  _assignSelectedComponentsToTarget(state, targetIndex) {
+    if (!state.selectedComponentIds?.size) return;
+    state.activeTargetIndex = targetIndex;
+    state.selectedComponentIds.forEach((componentId) => {
+      state.assignments.set(componentId, targetIndex);
+    });
+    state.selectedComponentIds = new Set();
+    this._hideManualContextMenu(state);
+  }
+
+  _handleManualCanvasContextMenu(event, canvas, state, rerender) {
+    if (!state.extracted) return;
+    event.preventDefault();
+    const componentId = this._getManualComponentAtPoint(event, canvas, state.extracted);
+    if (componentId !== null && !state.selectedComponentIds.has(componentId)) {
+      this._toggleManualComponentSelection(state, componentId, event.shiftKey);
+      rerender?.();
+    }
+    if (!state.selectedComponentIds?.size || !state.targets.length) return;
+    this._showManualContextMenu(event.clientX, event.clientY, state, rerender);
+  }
+
+  _showManualContextMenu(x, y, state, rerender) {
+    this._hideManualContextMenu(state);
+    const menu = document.createElement('div');
+    menu.className = 'template-context-menu';
+    state.targets.forEach((target, index) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'template-context-menu-item';
+      button.textContent = target.label;
+      button.addEventListener('click', () => {
+        this._assignSelectedComponentsToTarget(state, index);
+        rerender?.();
+      });
+      menu.appendChild(button);
+    });
+    menu.style.left = `${x}px`;
+    menu.style.top = `${y}px`;
+    document.body.appendChild(menu);
+    state.contextMenuEl = menu;
+  }
+
+  _hideManualContextMenu(state) {
+    if (!state?.contextMenuEl) return;
+    state.contextMenuEl.remove();
+    state.contextMenuEl = null;
+  }
+
+  _getManualComponentAtPoint(event, canvas, extracted) {
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.floor((event.clientX - rect.left) * (canvas.width / rect.width));
+    const y = Math.floor((event.clientY - rect.top) * (canvas.height / rect.height));
+
+    const hit = extracted.components.find((component) => (
+      x >= component.bounds.minX &&
+      x <= component.bounds.maxX &&
+      y >= component.bounds.minY &&
+      y <= component.bounds.maxY
+    ));
+
+    return hit ? hit.id : null;
+  }
+
+  _applyManualSplitAssignments(state) {
+    if (!state.extracted || !state.targets.length) {
+      return { applied: 0 };
+    }
+
+    let applied = 0;
+    state.targets.forEach((target, index) => {
+      const componentIds = [...state.assignments.entries()]
+        .filter(([, targetIndex]) => targetIndex === index)
+        .map(([componentId]) => componentId);
+      if (!componentIds.length) return;
+
+      const selection = this._getSelectionForTarget(target.categoryId, target.jamo);
+      if (!selection) return;
+
+      const commands = selectedComponentsToCommands(state.extracted, componentIds, selection.guide?.targetRegion);
+      const strokes = selectedComponentsToStrokes(state.extracted, componentIds, selection.guide?.targetRegion);
+      if (!commands.length) return;
+
+      this._storeImportedSelection(selection, commands, strokes);
+      applied += 1;
+    });
+
+    if (applied > 0) {
+      if (state.char && state.imageSrc) {
+        this.syllableImports[state.char] = {
+          imageSrc: state.imageSrc,
+        };
+      }
+      const fullLib = deriveAll(this.jamoLib);
+      this.previewPanel.updateJamoLib(fullLib);
+      if (this.browserPanel) this.browserPanel.updateJamoLib(fullLib);
+      this.previewPanel.updateSyllableImports(this.syllableImports);
+      if (this.browserPanel) this.browserPanel.updateSyllableImports(this.syllableImports);
+      this._persistJamoLib();
+      this._checkGenerateReady();
+      this._showToast(`Applied ${applied} split target${applied === 1 ? '' : 's'}.`, 'success', 2600);
+    }
+
+    return { applied };
+  }
+
+  _getSelectionForTarget(categoryId, jamo) {
+    const category = CATEGORIES.find((item) => item.id === categoryId);
+    if (!category) return null;
+    const itemIndex = category.items.findIndex((item) => item === jamo);
+    if (itemIndex < 0) return null;
+    const example = category.examples[itemIndex];
+    return {
+      categoryId,
+      jamo,
+      example,
+      guide: buildGuideMeta(categoryId, jamo, example),
+    };
+  }
+
+  _storeImportedSelection(selection, commands, strokes) {
+    const storageKeys = this._getStorageKeysForSelection(selection);
+    storageKeys.forEach((storageKey) => {
+      this.jamoLib[storageKey] = commands;
+    });
+    this.jamoDrafts[`${selection.categoryId}_${selection.jamo}`] = {
+      strokes,
+      importedStrokes: strokes,
+    };
+    this.jamoGrid.markCompleted(selection.categoryId, selection.jamo);
+  }
+
   _showPreviewModal() {
     const fullLib = deriveAll(this.jamoLib);
+    const defaultPreviewText = '가나다라마바사\n아자차카타파하\n손글씨 폰트 테스트';
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
     overlay.innerHTML = `
@@ -773,9 +1624,7 @@ class FonttoApp {
           <button class="modal-close" id="closePreviewModal">x</button>
         </div>
         <div class="modal-body">
-          <textarea class="preview-textarea" id="previewText" placeholder="Type preview text here...">가나다라마바사
-고교구규그기
-한글 폰트 테스트</textarea>
+          <textarea class="preview-textarea" id="previewText" placeholder="미리보기 문장을 입력하세요.">${defaultPreviewText}</textarea>
           <div class="preview-render" id="previewRender"></div>
         </div>
       </div>
@@ -885,9 +1734,9 @@ class FonttoApp {
     ctx.restore();
   }
 
-  // ════════════════════════════════════════════
-  //  폰트 생성 모달
-  // ════════════════════════════════════════════
+  // ?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧
+  //  ?고듃 ?앹꽦 紐⑤떖
+  // ?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧
   _showGenerateModal() {
     if (!this.jamoGrid?.isAllCompleted()) {
       this._showIncompleteToast();
@@ -975,6 +1824,7 @@ class FonttoApp {
   _handleResize() {
     if (this.drawingCanvas) this.drawingCanvas.resize();
     if (this.previewPanel) this.previewPanel.resize();
+    if (this.browserPanel) this.browserPanel.resize();
   }
 
   _loadSavedJamoLib() {
@@ -1002,6 +1852,14 @@ class FonttoApp {
           this.guideOverrides = parsedGuides;
         }
       }
+
+      const syllableRaw = window.localStorage.getItem(SYLLABLE_IMPORT_STORAGE_KEY);
+      if (syllableRaw) {
+        const parsedSyllables = JSON.parse(syllableRaw);
+        if (parsedSyllables && typeof parsedSyllables === 'object') {
+          this.syllableImports = parsedSyllables;
+        }
+      }
     } catch (error) {
       console.warn('Failed to load saved jamo library:', error);
     }
@@ -1012,6 +1870,7 @@ class FonttoApp {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(this.jamoLib));
       window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(this.jamoDrafts));
       window.localStorage.setItem(GUIDE_BOX_STORAGE_KEY, JSON.stringify(this.guideOverrides));
+      window.localStorage.setItem(SYLLABLE_IMPORT_STORAGE_KEY, JSON.stringify(this.syllableImports));
     } catch (error) {
       console.warn('Failed to persist jamo library:', error);
     }
@@ -1219,5 +2078,7 @@ function composeSyllableFromLib(cho, jung, jong, jamoLib) {
   return composeSyllable(cho, jung, jong, jamoLib);
 }
 
-// ── 앱 시작 ──
+// ?? ???쒖옉 ??
 const fonttoApp = new FonttoApp();
+
+

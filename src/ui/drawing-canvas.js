@@ -38,6 +38,10 @@ export class DrawingCanvas {
     this.guideQualityProfile = null;
     this.isGuideEditMode = false;
     this.guideEditDrag = null;
+    this.isStrokeSelectMode = false;
+    this.selectedStrokeIndices = new Set();
+    this.strokeSelectionDrag = null;
+    this.strokeMarquee = null;
 
     this._bindEvents();
     requestAnimationFrame(() => {
@@ -82,6 +86,14 @@ export class DrawingCanvas {
     if (this.activePointerId !== null) return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
 
+    if (this.isStrokeSelectMode) {
+      e.preventDefault();
+      this.activePointerId = e.pointerId;
+      this.canvas.setPointerCapture(e.pointerId);
+      this._startStrokeSelection(e);
+      return;
+    }
+
     if (this.isGuideEditMode && this.guideTargetRegion) {
       e.preventDefault();
       this.activePointerId = e.pointerId;
@@ -100,6 +112,10 @@ export class DrawingCanvas {
     if (!this._isActivePointer(e)) return;
 
     e.preventDefault();
+    if (this.isStrokeSelectMode && this.strokeSelectionDrag) {
+      this._continueStrokeSelectionDrag(e);
+      return;
+    }
     if (this.isGuideEditMode && this.guideEditDrag) {
       this._continueGuideEdit(e);
       return;
@@ -111,6 +127,17 @@ export class DrawingCanvas {
     if (!this._isActivePointer(e)) return;
 
     e.preventDefault();
+    if (this.isStrokeSelectMode) {
+      if (this.strokeSelectionDrag) {
+        this._continueStrokeSelectionDrag(e);
+      }
+      this.activePointerId = null;
+      this._endStrokeSelectionDrag();
+      if (this.canvas.hasPointerCapture(e.pointerId)) {
+        this.canvas.releasePointerCapture(e.pointerId);
+      }
+      return;
+    }
     if (this.isGuideEditMode && this.guideEditDrag) {
       this._continueGuideEdit(e);
       this.activePointerId = null;
@@ -207,6 +234,9 @@ export class DrawingCanvas {
     }
     this.strokes = [];
     this.currentStroke = null;
+    this.selectedStrokeIndices.clear();
+    this.strokeSelectionDrag = null;
+    this.strokeMarquee = null;
     this.render();
     this._emitChange();
   }
@@ -216,6 +246,9 @@ export class DrawingCanvas {
     this.currentStroke = null;
     this.undoStack = [...this.strokes];
     this.redoStack = [];
+    this.selectedStrokeIndices.clear();
+    this.strokeSelectionDrag = null;
+    this.strokeMarquee = null;
     this.render();
     this._emitChange();
   }
@@ -250,15 +283,34 @@ export class DrawingCanvas {
     this.guideTargetRegion = guide.targetRegion ? { ...guide.targetRegion } : null;
     this.guideQualityProfile = guide.qualityProfile || null;
     this.guideEditDrag = null;
-    this.canvas.style.cursor = this.isGuideEditMode ? 'move' : 'crosshair';
+    this.canvas.style.cursor = this._getCanvasCursor();
     this.render();
     this._emitChange();
   }
 
   setGuideEditMode(enabled) {
     this.isGuideEditMode = !!enabled;
+    if (enabled) {
+      this.isStrokeSelectMode = false;
+      this.selectedStrokeIndices.clear();
+      this.strokeSelectionDrag = null;
+    }
     this.guideEditDrag = null;
-    this.canvas.style.cursor = this.isGuideEditMode ? 'move' : 'crosshair';
+    this.canvas.style.cursor = this._getCanvasCursor();
+    this.render();
+  }
+
+  setStrokeSelectMode(enabled) {
+    this.isStrokeSelectMode = !!enabled;
+    if (enabled) {
+      this.isGuideEditMode = false;
+      this.guideEditDrag = null;
+    } else {
+      this.selectedStrokeIndices.clear();
+      this.strokeSelectionDrag = null;
+      this.strokeMarquee = null;
+    }
+    this.canvas.style.cursor = this._getCanvasCursor();
     this.render();
   }
 
@@ -275,6 +327,164 @@ export class DrawingCanvas {
   setGuideTargetRegion(region) {
     this.guideTargetRegion = region ? { ...region } : null;
     this.guideEditDrag = null;
+    this.render();
+    this._emitChange();
+  }
+
+  keepSelectedStrokes() {
+    if (this.selectedStrokeIndices.size === 0) return;
+    this.strokes = this.strokes.filter((_, index) => this.selectedStrokeIndices.has(index));
+    this.undoStack = [...this.strokes];
+    this.redoStack = [];
+    this.selectedStrokeIndices = new Set(this.strokes.map((_, index) => index));
+    this.render();
+    this._emitChange();
+  }
+
+  deleteSelectedStrokes() {
+    if (this.selectedStrokeIndices.size === 0) return;
+    this.strokes = this.strokes.filter((_, index) => !this.selectedStrokeIndices.has(index));
+    this.undoStack = [...this.strokes];
+    this.redoStack = [];
+    this.selectedStrokeIndices.clear();
+    this.strokeSelectionDrag = null;
+    this.render();
+    this._emitChange();
+  }
+
+  selectAllStrokes() {
+    this.selectedStrokeIndices = new Set(this.strokes.map((_, index) => index));
+    this.render();
+  }
+
+  clearStrokeSelection() {
+    this.selectedStrokeIndices.clear();
+    this.strokeSelectionDrag = null;
+    this.strokeMarquee = null;
+    this.canvas.style.cursor = this._getCanvasCursor();
+    this.render();
+  }
+
+  duplicateSelectedStrokes() {
+    if (this.selectedStrokeIndices.size === 0) return;
+    const duplicates = [];
+    this.strokes.forEach((stroke, index) => {
+      if (!this.selectedStrokeIndices.has(index)) return;
+      duplicates.push(stroke.map((point) => ({
+        ...point,
+        x: point.x + 10,
+        y: point.y + 10,
+        time: point.time + 1,
+      })));
+    });
+    const startIndex = this.strokes.length;
+    this.strokes.push(...duplicates);
+    this.undoStack = [...this.strokes];
+    this.redoStack = [];
+    this.selectedStrokeIndices = new Set(duplicates.map((_, index) => startIndex + index));
+    this.render();
+    this._emitChange();
+  }
+
+  nudgeSelectedStrokes(dx, dy) {
+    if (this.selectedStrokeIndices.size === 0) return;
+    this.strokes = this.strokes.map((stroke, index) => {
+      if (!this.selectedStrokeIndices.has(index)) {
+        return stroke.map((point) => ({ ...point }));
+      }
+      return stroke.map((point) => ({
+        ...point,
+        x: point.x + dx,
+        y: point.y + dy,
+      }));
+    });
+    this.undoStack = [...this.strokes];
+    this.redoStack = [];
+    this.render();
+    this._emitChange();
+  }
+
+  rotateSelectedStrokes(degrees) {
+    if (this.selectedStrokeIndices.size === 0) return;
+    const center = this._getSelectedStrokeCenter();
+    if (!center) return;
+    const radians = degrees * (Math.PI / 180);
+    const cos = Math.cos(radians);
+    const sin = Math.sin(radians);
+    this.strokes = this.strokes.map((stroke, index) => {
+      if (!this.selectedStrokeIndices.has(index)) {
+        return stroke.map((point) => ({ ...point }));
+      }
+      return stroke.map((point) => {
+        const relX = point.x - center.x;
+        const relY = point.y - center.y;
+        return {
+          ...point,
+          x: center.x + relX * cos - relY * sin,
+          y: center.y + relX * sin + relY * cos,
+        };
+      });
+    });
+    this.undoStack = [...this.strokes];
+    this.redoStack = [];
+    this.render();
+    this._emitChange();
+  }
+
+  scaleSelectedStrokes(scaleX, scaleY) {
+    if (this.selectedStrokeIndices.size === 0) return;
+    const center = this._getSelectedStrokeCenter();
+    if (!center) return;
+    this.strokes = this.strokes.map((stroke, index) => {
+      if (!this.selectedStrokeIndices.has(index)) {
+        return stroke.map((point) => ({ ...point }));
+      }
+      return stroke.map((point) => ({
+        ...point,
+        x: center.x + (point.x - center.x) * scaleX,
+        y: center.y + (point.y - center.y) * scaleY,
+      }));
+    });
+    this.undoStack = [...this.strokes];
+    this.redoStack = [];
+    this.render();
+    this._emitChange();
+  }
+
+  bringSelectedToFront() {
+    if (this.selectedStrokeIndices.size === 0) return;
+    const selected = [];
+    const remaining = [];
+    this.strokes.forEach((stroke, index) => {
+      if (this.selectedStrokeIndices.has(index)) {
+        selected.push(stroke);
+      } else {
+        remaining.push(stroke);
+      }
+    });
+    this.strokes = [...remaining, ...selected];
+    this.undoStack = [...this.strokes];
+    this.redoStack = [];
+    this.selectedStrokeIndices = new Set(selected.map((_, index) => remaining.length + index));
+    this.render();
+    this._emitChange();
+  }
+
+  sendSelectedToBack() {
+    if (this.selectedStrokeIndices.size === 0) return;
+    const selected = [];
+    const remaining = [];
+    this.strokes.forEach((stroke, index) => {
+      if (this.selectedStrokeIndices.has(index)) {
+        selected.push(stroke);
+      } else {
+        remaining.push(stroke);
+      }
+    });
+    this.strokes = [...selected, ...remaining];
+    this.undoStack = [...this.strokes];
+    this.redoStack = [];
+    this.selectedStrokeIndices = new Set(selected.map((_, index) => index));
     this.render();
     this._emitChange();
   }
@@ -312,7 +522,7 @@ export class DrawingCanvas {
       ctx.restore();
     }
 
-    if (this.guideTargetRegion) {
+    if (this.guideTargetRegion && this.isGuideEditMode) {
       const pad = 16;
       const inner = {
         x: pad,
@@ -461,12 +671,17 @@ export class DrawingCanvas {
 
     this._drawGuides();
 
-    for (const stroke of this.strokes) {
-      this._drawStroke(stroke, false);
+    for (let index = 0; index < this.strokes.length; index++) {
+      const stroke = this.strokes[index];
+      this._drawStroke(stroke, false, this.selectedStrokeIndices.has(index));
     }
 
     if (this.currentStroke && this.currentStroke.length > 1) {
       this._drawStroke(this.currentStroke, true);
+    }
+
+    if (this.strokeMarquee) {
+      this._drawStrokeMarquee(this.strokeMarquee);
     }
   }
 
@@ -1090,5 +1305,262 @@ export class DrawingCanvas {
         time: point.time ?? Date.now(),
       }))
     );
+  }
+
+  _drawStroke(stroke, isActive = false, isSelected = false) {
+    const processedStroke = this._getProcessedStroke(stroke);
+    if (processedStroke.length < 2) return;
+
+    const ctx = this.ctx;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    if (this.variableWidth) {
+      for (let i = 1; i < processedStroke.length; i++) {
+        const prev = processedStroke[i - 1];
+        const curr = processedStroke[i];
+        const dx = curr.x - prev.x;
+        const dy = curr.y - prev.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const dt = Math.max(curr.time - prev.time, 1);
+        const speed = dist / dt;
+
+        const width = Math.max(
+          this.penSize * 0.3,
+          this.penSize * (1.2 - speed * 0.15)
+        );
+
+        ctx.beginPath();
+        ctx.strokeStyle = isSelected
+          ? 'rgba(0, 212, 170, 0.96)'
+          : isActive
+            ? 'rgba(255, 255, 255, 0.9)'
+            : 'rgba(255, 255, 255, 0.95)';
+        ctx.lineWidth = isSelected ? width + 1.5 : width;
+        ctx.moveTo(prev.x, prev.y);
+        ctx.lineTo(curr.x, curr.y);
+        ctx.stroke();
+      }
+    } else {
+      ctx.beginPath();
+      ctx.strokeStyle = isSelected
+        ? 'rgba(0, 212, 170, 0.96)'
+        : isActive
+          ? 'rgba(255, 255, 255, 0.9)'
+          : 'rgba(255, 255, 255, 0.95)';
+      ctx.lineWidth = isSelected ? this.penSize + 1.5 : this.penSize;
+      ctx.moveTo(processedStroke[0].x, processedStroke[0].y);
+
+      for (let i = 1; i < processedStroke.length; i++) {
+        if (i < processedStroke.length - 1) {
+          const mid = {
+            x: (processedStroke[i].x + processedStroke[i + 1].x) / 2,
+            y: (processedStroke[i].y + processedStroke[i + 1].y) / 2,
+          };
+          ctx.quadraticCurveTo(processedStroke[i].x, processedStroke[i].y, mid.x, mid.y);
+        } else {
+          ctx.lineTo(processedStroke[i].x, processedStroke[i].y);
+        }
+      }
+      ctx.stroke();
+    }
+  }
+
+  _startStrokeSelection(e) {
+    const point = this._getPos(e);
+    const hitIndex = this._getStrokeIndexAtPoint(point);
+    if (hitIndex < 0) {
+      this.strokeSelectionDrag = {
+        mode: 'marquee',
+        startPoint: point,
+        currentPoint: point,
+        additive: !!e.shiftKey,
+        originalSelection: new Set(this.selectedStrokeIndices),
+      };
+      this.strokeMarquee = this._createMarqueeRect(point, point);
+      if (!e.shiftKey) {
+        this.selectedStrokeIndices.clear();
+      }
+      this.canvas.style.cursor = 'crosshair';
+      this.render();
+      return;
+    }
+
+    if (e.shiftKey) {
+      if (this.selectedStrokeIndices.has(hitIndex)) {
+        this.selectedStrokeIndices.delete(hitIndex);
+      } else {
+        this.selectedStrokeIndices.add(hitIndex);
+      }
+      this.strokeSelectionDrag = null;
+      this.render();
+      return;
+    }
+
+    if (!this.selectedStrokeIndices.has(hitIndex)) {
+      this.selectedStrokeIndices = new Set([hitIndex]);
+    }
+
+    this.strokeSelectionDrag = {
+      mode: 'move',
+      startPoint: point,
+      originalStrokes: this._cloneStrokes(this.strokes),
+      moved: false,
+    };
+    this.strokeMarquee = null;
+    this.canvas.style.cursor = 'move';
+    this.render();
+  }
+
+  _continueStrokeSelectionDrag(e) {
+    if (!this.strokeSelectionDrag) return;
+    if (this.strokeSelectionDrag.mode === 'marquee') {
+      const point = this._getPos(e);
+      this.strokeSelectionDrag.currentPoint = point;
+      this.strokeMarquee = this._createMarqueeRect(this.strokeSelectionDrag.startPoint, point);
+      const hits = this._getStrokeIndicesInRect(this.strokeMarquee);
+      this.selectedStrokeIndices = this.strokeSelectionDrag.additive
+        ? new Set([...this.strokeSelectionDrag.originalSelection, ...hits])
+        : new Set(hits);
+      this.render();
+      return;
+    }
+    const point = this._getPos(e);
+    const dx = point.x - this.strokeSelectionDrag.startPoint.x;
+    const dy = point.y - this.strokeSelectionDrag.startPoint.y;
+    if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+      this.strokeSelectionDrag.moved = true;
+    }
+
+    this.strokes = this.strokeSelectionDrag.originalStrokes.map((stroke, index) => {
+      if (!this.selectedStrokeIndices.has(index)) {
+        return stroke.map((pt) => ({ ...pt }));
+      }
+      return stroke.map((pt) => ({
+        ...pt,
+        x: pt.x + dx,
+        y: pt.y + dy,
+      }));
+    });
+    this.render();
+    this._emitChange();
+  }
+
+  _endStrokeSelectionDrag() {
+    if (!this.strokeSelectionDrag) return;
+    if (this.strokeSelectionDrag.mode === 'marquee') {
+      this.strokeSelectionDrag = null;
+      this.strokeMarquee = null;
+      this.canvas.style.cursor = this._getCanvasCursor();
+      this.render();
+      return;
+    }
+    if (!this.strokeSelectionDrag.moved) {
+      this.strokes = this._cloneStrokes(this.strokeSelectionDrag.originalStrokes);
+    }
+    this.strokeSelectionDrag = null;
+    this.strokeMarquee = null;
+    this.undoStack = [...this.strokes];
+    this.redoStack = [];
+    this.canvas.style.cursor = this._getCanvasCursor();
+    this.render();
+    this._emitChange();
+  }
+
+  _getStrokeIndexAtPoint(point) {
+    for (let index = this.strokes.length - 1; index >= 0; index--) {
+      const stroke = this._getProcessedStroke(this.strokes[index]);
+      if (stroke.length < 2) continue;
+      const bounds = this._getBounds(stroke);
+      const padded = {
+        x: bounds.minX - 12,
+        y: bounds.minY - 12,
+        w: (bounds.maxX - bounds.minX) + 24,
+        h: (bounds.maxY - bounds.minY) + 24,
+      };
+      if (!this._isPointInsideRect(point, padded)) continue;
+      if (this._getDistanceToStroke(point, stroke) <= 16) {
+        return index;
+      }
+    }
+    return -1;
+  }
+
+  _getDistanceToStroke(point, stroke) {
+    let minDistance = Number.POSITIVE_INFINITY;
+    for (let i = 1; i < stroke.length; i++) {
+      minDistance = Math.min(minDistance, this._getDistanceToSegment(point, stroke[i - 1], stroke[i]));
+    }
+    return minDistance;
+  }
+
+  _getDistanceToSegment(point, a, b) {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    if (dx === 0 && dy === 0) {
+      return Math.hypot(point.x - a.x, point.y - a.y);
+    }
+    const t = Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / (dx * dx + dy * dy)));
+    const px = a.x + dx * t;
+    const py = a.y + dy * t;
+    return Math.hypot(point.x - px, point.y - py);
+  }
+
+  _createMarqueeRect(a, b) {
+    return {
+      x: Math.min(a.x, b.x),
+      y: Math.min(a.y, b.y),
+      w: Math.abs(a.x - b.x),
+      h: Math.abs(a.y - b.y),
+    };
+  }
+
+  _getStrokeIndicesInRect(rect) {
+    const hits = [];
+    this.strokes.forEach((stroke, index) => {
+      const processed = this._getProcessedStroke(stroke);
+      if (processed.length === 0) return;
+      const bounds = this._getBounds(processed);
+      const intersects = !(
+        bounds.maxX < rect.x ||
+        bounds.minX > rect.x + rect.w ||
+        bounds.maxY < rect.y ||
+        bounds.minY > rect.y + rect.h
+      );
+      if (intersects) {
+        hits.push(index);
+      }
+    });
+    return hits;
+  }
+
+  _drawStrokeMarquee(rect) {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.fillStyle = 'rgba(124, 92, 252, 0.12)';
+    ctx.strokeStyle = 'rgba(124, 92, 252, 0.9)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 4]);
+    ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+    ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+    ctx.restore();
+  }
+
+  _getSelectedStrokeCenter() {
+    const points = this.strokes
+      .filter((_, index) => this.selectedStrokeIndices.has(index))
+      .flatMap((stroke) => stroke);
+    if (points.length === 0) return null;
+    const bounds = this._getBounds(points);
+    return {
+      x: (bounds.minX + bounds.maxX) / 2,
+      y: (bounds.minY + bounds.maxY) / 2,
+    };
+  }
+
+  _getCanvasCursor() {
+    if (this.isStrokeSelectMode) return 'move';
+    if (this.isGuideEditMode) return 'move';
+    return 'crosshair';
   }
 }

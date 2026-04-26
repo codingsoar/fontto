@@ -205,7 +205,7 @@ function createQualityProfile(overrides = {}) {
   };
 }
 
-function buildGuideMeta(categoryId, jamo, example) {
+export function buildGuideMeta(categoryId, jamo, example) {
   const category = CATEGORIES.find((item) => item.id === categoryId);
   const sequence = getGuideSequence(example);
   const info = decompose(example);
@@ -328,9 +328,10 @@ function buildGuideMeta(categoryId, jamo, example) {
   }
 }
 export class JamoGrid {
-  constructor(container, onSelect) {
+  constructor(container, onSelect, options = {}) {
     this.container = container;
     this.onSelect = onSelect;
+    this.options = options;
     this.completedMap = {};
     this.activeCategory = 0;
     this.activeItemIndex = -1;
@@ -362,17 +363,54 @@ export class JamoGrid {
       <span class="progress-text">0/${REQUIRED_JAMO_COUNT}</span>
     `;
 
+    const quickFind = document.createElement('div');
+    quickFind.className = 'jamo-quick-find';
+    quickFind.innerHTML = `
+      <div class="jamo-quick-find-label">Find syllable</div>
+      <div class="jamo-quick-find-row">
+        <input type="text" class="jamo-quick-find-input" maxlength="1" placeholder="한" />
+        <button type="button" class="tool-btn jamo-quick-find-btn">Go</button>
+      </div>
+      <p class="jamo-quick-find-help">Enter one Hangul syllable to jump to the related jamo task.</p>
+    `;
+
     const gridArea = document.createElement('div');
     gridArea.className = 'jamo-grid-area';
 
     this.container.appendChild(tabBar);
     this.container.appendChild(progressBar);
+    this.container.appendChild(quickFind);
     this.container.appendChild(gridArea);
 
     this.tabBar = tabBar;
     this.progressBar = progressBar;
+    this.quickFindInput = quickFind.querySelector('.jamo-quick-find-input');
     this.gridArea = gridArea;
+
+    quickFind.querySelector('.jamo-quick-find-btn').addEventListener('click', () => {
+      this._handleQuickFind();
+    });
+    this.quickFindInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        this._handleQuickFind();
+      }
+    });
+
     this._renderGrid();
+  }
+
+  _handleQuickFind() {
+    const value = this.quickFindInput?.value.trim();
+    if (!value) return;
+
+    const info = decompose(value);
+    if (!info) {
+      this.options.onInvalidLocateChar?.(value);
+      return;
+    }
+
+    this.options.onLocateChar?.(value, info);
   }
 
   _switchCategory(idx) {
