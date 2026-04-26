@@ -1,17 +1,18 @@
 /**
- * toolbar.js — 드로잉 도구 바
+ * toolbar.js - editor toolbar UI
  */
 
 export class Toolbar {
   /**
    * @param {HTMLElement} container
-   * @param {Object} callbacks — { onUndo, onRedo, onClear, onPenSize, onPenMode, onVariableWidth, onSave, onNext }
+   * @param {Object} callbacks
    */
   constructor(container, callbacks = {}) {
     this.container = container;
     this.callbacks = callbacks;
     this.penSize = 8;
     this.variableWidth = false;
+    this.guideEditMode = false;
     this._build();
   }
 
@@ -19,19 +20,19 @@ export class Toolbar {
     this.container.innerHTML = '';
     this.container.classList.add('toolbar');
 
-    // ── 펜 굵기 ──
-    const penGroup = this._createGroup('펜 굵기');
+    const penGroup = this._createGroup('Pen');
     const sizeSlider = document.createElement('input');
     sizeSlider.type = 'range';
     sizeSlider.min = 2;
     sizeSlider.max = 20;
     sizeSlider.value = this.penSize;
     sizeSlider.className = 'pen-slider';
-    sizeSlider.addEventListener('input', (e) => {
-      this.penSize = parseInt(e.target.value);
+    sizeSlider.addEventListener('input', (event) => {
+      this.penSize = parseInt(event.target.value, 10);
       sizeLabel.textContent = `${this.penSize}px`;
-      if (this.callbacks.onPenSize) this.callbacks.onPenSize(this.penSize);
+      this.callbacks.onPenSize?.(this.penSize);
     });
+
     const sizeLabel = document.createElement('span');
     sizeLabel.className = 'pen-size-label';
     sizeLabel.textContent = `${this.penSize}px`;
@@ -39,54 +40,63 @@ export class Toolbar {
     penGroup.appendChild(sizeLabel);
     this.container.appendChild(penGroup);
 
-    // ── 획 스타일 토글 ──
-    const styleGroup = this._createGroup('획 스타일');
+    const styleGroup = this._createGroup('Stroke');
     const styleToggle = document.createElement('button');
     styleToggle.className = 'tool-btn style-toggle';
-    styleToggle.textContent = '균일';
-    styleToggle.title = '균일 굵기 / 가변 굵기 전환';
+    styleToggle.textContent = 'Fixed';
+    styleToggle.title = 'Toggle fixed / variable stroke width';
     styleToggle.addEventListener('click', () => {
       this.variableWidth = !this.variableWidth;
-      styleToggle.textContent = this.variableWidth ? '가변' : '균일';
+      styleToggle.textContent = this.variableWidth ? 'Variable' : 'Fixed';
       styleToggle.classList.toggle('active', this.variableWidth);
-      if (this.callbacks.onVariableWidth) this.callbacks.onVariableWidth(this.variableWidth);
+      this.callbacks.onVariableWidth?.(this.variableWidth);
     });
     styleGroup.appendChild(styleToggle);
     this.container.appendChild(styleGroup);
 
-    // ── 편집 버튼들 ──
-    const editGroup = this._createGroup('편집');
-
-    const undoBtn = this._createBtn('↩', '되돌리기', () => {
-      if (this.callbacks.onUndo) this.callbacks.onUndo();
-    });
-    const redoBtn = this._createBtn('↪', '다시하기', () => {
-      if (this.callbacks.onRedo) this.callbacks.onRedo();
-    });
-    const clearBtn = this._createBtn('🗑', '지우기', () => {
-      if (this.callbacks.onClear) this.callbacks.onClear();
+    const guideGroup = this._createGroup('Guide');
+    const guideEditBtn = document.createElement('button');
+    guideEditBtn.className = 'tool-btn guide-edit-btn';
+    guideEditBtn.textContent = 'Adjust Box';
+    guideEditBtn.title = 'Move or resize the target box';
+    guideEditBtn.addEventListener('click', () => {
+      this.setGuideEditMode(!this.guideEditMode);
+      this.callbacks.onToggleGuideEdit?.(this.guideEditMode);
     });
 
-    editGroup.appendChild(undoBtn);
-    editGroup.appendChild(redoBtn);
-    editGroup.appendChild(clearBtn);
+    const guideResetBtn = document.createElement('button');
+    guideResetBtn.className = 'tool-btn guide-reset-btn';
+    guideResetBtn.textContent = 'Reset Box';
+    guideResetBtn.title = 'Reset the target box to the default guide';
+    guideResetBtn.addEventListener('click', () => {
+      this.callbacks.onResetGuideBox?.();
+    });
+
+    guideGroup.appendChild(guideEditBtn);
+    guideGroup.appendChild(guideResetBtn);
+    this.container.appendChild(guideGroup);
+    this.guideEditBtn = guideEditBtn;
+
+    const editGroup = this._createGroup('Edit');
+    editGroup.appendChild(this._createBtn('Undo', 'Undo', () => this.callbacks.onUndo?.()));
+    editGroup.appendChild(this._createBtn('Redo', 'Redo', () => this.callbacks.onRedo?.()));
+    editGroup.appendChild(this._createBtn('Clear', 'Clear', () => this.callbacks.onClear?.()));
     this.container.appendChild(editGroup);
 
-    // ── 저장 / 다음 ──
     const actionGroup = this._createGroup('');
 
     const saveBtn = document.createElement('button');
     saveBtn.className = 'tool-btn save-btn';
-    saveBtn.innerHTML = '✓ 저장';
+    saveBtn.textContent = 'Save';
     saveBtn.addEventListener('click', () => {
-      if (this.callbacks.onSave) this.callbacks.onSave();
+      this.callbacks.onSave?.();
     });
 
     const nextBtn = document.createElement('button');
     nextBtn.className = 'tool-btn next-btn';
-    nextBtn.innerHTML = '다음 →';
+    nextBtn.textContent = 'Save + Next';
     nextBtn.addEventListener('click', () => {
-      if (this.callbacks.onNext) this.callbacks.onNext();
+      this.callbacks.onNext?.();
     });
 
     actionGroup.appendChild(saveBtn);
@@ -106,12 +116,20 @@ export class Toolbar {
     return group;
   }
 
-  _createBtn(icon, title, onClick) {
+  _createBtn(text, title, onClick) {
     const btn = document.createElement('button');
     btn.className = 'tool-btn';
-    btn.innerHTML = icon;
+    btn.textContent = text;
     btn.title = title;
     btn.addEventListener('click', onClick);
     return btn;
+  }
+
+  setGuideEditMode(enabled) {
+    this.guideEditMode = !!enabled;
+    if (this.guideEditBtn) {
+      this.guideEditBtn.classList.toggle('active', this.guideEditMode);
+      this.guideEditBtn.textContent = this.guideEditMode ? 'Editing Box' : 'Adjust Box';
+    }
   }
 }

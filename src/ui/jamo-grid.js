@@ -68,6 +68,7 @@ export const CATEGORIES = [
     items: BASIC_VOWELS,
     examples: [syllable(0, 0), syllable(0, 2), syllable(0, 4), syllable(0, 6), syllable(0, 8), syllable(0, 12), syllable(0, 13), syllable(0, 17), syllable(0, 18), syllable(0, 20)],
     guideType: 'jung',
+    guideOverrideScope: 'item',
   },
   {
     id: 'jung_wb',
@@ -185,6 +186,25 @@ function extendRegionBottomToMidline(slot) {
   };
 }
 
+function createQualityProfile(overrides = {}) {
+  return {
+    minFillRatio: 0.14,
+    minCoverageX: 0.24,
+    minCoverageY: 0.24,
+    maxOverflowRatio: 0.28,
+    maxCenterOffsetX: 0.26,
+    maxCenterOffsetY: 0.26,
+    sparsePointCount: 5,
+    sparseSingleStrokePointCount: 8,
+    sparseLengthRatio: 0.32,
+    thinCoverageMin: 0.18,
+    strongCoverageMin: 0.72,
+    allowThinX: false,
+    allowThinY: false,
+    ...overrides,
+  };
+}
+
 function buildGuideMeta(categoryId, jamo, example) {
   const category = CATEGORIES.find((item) => item.id === categoryId);
   const sequence = getGuideSequence(example);
@@ -209,6 +229,8 @@ function buildGuideMeta(categoryId, jamo, example) {
     label: '',
     targetRegion: null,
     storageKeys: [],
+    qualityProfile: createQualityProfile(),
+    overrideScope: category?.guideOverrideScope || 'category',
   };
 
   switch (category?.guideType) {
@@ -218,11 +240,24 @@ function buildGuideMeta(categoryId, jamo, example) {
       guide.targetRegion = categoryId === 'cho_h_wf'
         ? (extendRegionBottomToMidline(canvasLayout?.cho) ?? { x: 0.14, y: 0.12, w: 0.72, h: 0.38 })
         : (canvasLayout?.cho ?? (categoryId.includes('_h')
-        ? { x: 0.14, y: 0.50, w: 0.72, h: 0.38 }
-        : { x: 0.08, y: 0.11, w: 0.42, h: 0.79 }));
+          ? { x: 0.14, y: 0.50, w: 0.72, h: 0.38 }
+          : { x: 0.08, y: 0.11, w: 0.42, h: 0.79 }));
       guide.storageKeys = COMPOSITION_CONTEXT_MAP[categoryId]
         ? [`${categoryId}_${jamo}`, `cho_${categoryId.includes('_h') ? 'h' : 'v'}_${COMPOSITION_CONTEXT_MAP[categoryId]}_${jamo}`]
         : [`${categoryId}_${jamo}`];
+      guide.qualityProfile = categoryId.includes('_h')
+        ? createQualityProfile({
+          minFillRatio: 0.11,
+          minCoverageY: 0.18,
+          maxCenterOffsetY: 0.3,
+          allowThinY: true,
+        })
+        : createQualityProfile({
+          minFillRatio: 0.11,
+          minCoverageX: 0.18,
+          maxCenterOffsetX: 0.3,
+          allowThinX: true,
+        });
       return guide;
     case 'jung': {
       const composed = info !== null && getJungInfo(info.jung).isCompound;
@@ -242,6 +277,21 @@ function buildGuideMeta(categoryId, jamo, example) {
             ? { x: 0.16, y: 0.39, w: 0.68, h: 0.18 }
             : { x: 0.47, y: 0.43, w: 0.38, h: 0.47 })));
       guide.storageKeys = [`${categoryId}_${jamo}`, `${categoryId}_${COMPOSITION_CONTEXT_MAP[categoryId]}_${jamo}`];
+      guide.qualityProfile = isHorizontal
+        ? createQualityProfile({
+          minFillRatio: isCompoundVowel ? 0.1 : 0.07,
+          minCoverageY: isCompoundVowel ? 0.18 : 0.1,
+          maxCenterOffsetY: 0.34,
+          sparseLengthRatio: 0.22,
+          allowThinY: true,
+        })
+        : createQualityProfile({
+          minFillRatio: isCompoundVowel ? 0.11 : 0.09,
+          minCoverageX: isCompoundVowel ? 0.18 : 0.13,
+          maxCenterOffsetX: 0.32,
+          sparseLengthRatio: 0.24,
+          allowThinX: true,
+        });
       return guide;
     }
     case 'jong':
@@ -251,6 +301,13 @@ function buildGuideMeta(categoryId, jamo, example) {
       guide.storageKeys = categoryId === 'jong_h'
         ? [`${categoryId}_${jamo}`, `jong_single_horizontal_${jamo}`]
         : [`${categoryId}_${jamo}`, `jong_single_${jamo}`];
+      guide.qualityProfile = createQualityProfile({
+        minFillRatio: 0.08,
+        minCoverageY: 0.12,
+        maxCenterOffsetY: 0.32,
+        sparseLengthRatio: 0.22,
+        allowThinY: true,
+      });
       return guide;
     case 'jong_cluster':
       guide.targetIndices = sequence.length >= 4 ? [2, 3] : [sequence.length - 1];
@@ -259,6 +316,12 @@ function buildGuideMeta(categoryId, jamo, example) {
       guide.storageKeys = categoryId === 'jong_cluster_h'
         ? [`${categoryId}_${jamo}`, `jong_cluster_horizontal_${jamo}`]
         : [`${categoryId}_${jamo}`, `jong_cluster_${jamo}`, `jong_cluster_cvc_compound_${jamo}`];
+      guide.qualityProfile = createQualityProfile({
+        minFillRatio: 0.1,
+        minCoverageY: 0.14,
+        maxCenterOffsetY: 0.3,
+        sparseLengthRatio: 0.26,
+      });
       return guide;
     default:
       return guide;

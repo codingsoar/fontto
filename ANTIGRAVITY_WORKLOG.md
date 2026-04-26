@@ -230,3 +230,118 @@
   1. Build and manually test a few guided tasks that are intentionally too small, off-center, and overflowing to tune thresholds.
   2. If false positives show up on narrow vowels or finals, make thresholds category-aware using guide metadata.
   3. Add optional per-task visual overlays for centerline / coverage debugging if stylus-device tuning continues.
+---
+
+- Date: 2026-04-26
+- Request: Push the current local Fontto project to GitHub and leave a clean handoff note for the next session.
+- Scope:
+  - `D:\fontto\ANTIGRAVITY_WORKLOG.md`
+- Implemented:
+  1. Initialized `D:\fontto` as a git repository with `main` as the default branch.
+  2. Added GitHub remote:
+     - `origin = https://github.com/codingsoar/fontto.git`
+  3. Created the first repository commit:
+     - commit: `35ba48c`
+     - message: `Initial project import`
+  4. Pushed `main` to GitHub and set upstream tracking to `origin/main`.
+  5. Added this handoff note so the next session can resume without reconstructing state.
+- Current state:
+  1. Local build last passed with `npm run build`.
+  2. GitHub remote now contains the current project snapshot.
+  3. The latest in-progress product work is the guided-input quality heuristic pass:
+     - sparse input detection
+     - off-center detection
+     - thin-strip / skewed-shape detection
+     - live quality summary with center metric
+- Highest-value next tasks:
+  1. Manually test guided input on real samples and tune quality thresholds.
+  2. Make quality thresholds category-aware if narrow medials or finals trigger false positives.
+  3. If exported glyph issues still appear in external font apps, add a per-syllable debug export path for inspection.
+---
+
+- Date: 2026-04-26
+- Request: Continue the current Fontto workstream from the existing handoff notes.
+- Scope:
+  - `D:\fontto\src\ui\jamo-grid.js`
+  - `D:\fontto\src\ui\drawing-canvas.js`
+  - `D:\fontto\ANTIGRAVITY_WORKLOG.md`
+- Implemented:
+  1. Closed the pending validation from the prior session:
+     - `npm run build` now passes
+  2. Added per-task quality profiles in `jamo-grid.js` guide metadata:
+     - shared threshold defaults through `createQualityProfile()`
+     - category-aware overrides for initials, medials, finals, and final clusters
+  3. Wired the guide quality profiles into `drawing-canvas.js`:
+     - size, overflow, sparse-input, off-center, and thin-strip checks now read the current task profile
+     - narrow-but-valid shapes can now be allowed on the relevant axis instead of always triggering `skewed_shape`
+  4. Relaxed thresholds for shapes that are structurally narrow by design:
+     - horizontal medials
+     - vertical medials
+     - single finals
+     - initial slots with strongly directional layouts
+- Validation:
+  - `npm run build` passes after the threshold-profile changes.
+- Current state:
+  1. Guided-input warnings are now less one-size-fits-all.
+  2. The editor can distinguish between suspicious thin input and intentionally narrow tasks more accurately.
+  3. Manual device testing is still needed to tune the exact threshold values.
+- Next recommended tasks:
+  1. Test a representative set of narrow vowels and finals on real stylus input and record any remaining false positives.
+  2. If tuning is still noisy, add lightweight debug overlays for target-box center, coverage bounds, and overflow points.
+  3. Consider surfacing the current task profile in developer-only debug UI while threshold tuning continues.
+---
+
+- Date: 2026-04-26
+- Request: Let the user adjust the target box directly instead of relying only on the built-in guide box.
+- Scope:
+  - `D:\fontto\src\ui\toolbar.js`
+  - `D:\fontto\src\ui\drawing-canvas.js`
+  - `D:\fontto\src\main.js`
+  - `D:\fontto\ANTIGRAVITY_WORKLOG.md`
+- Implemented:
+  1. Rebuilt `toolbar.js` into a clean English toolbar file and added guide-box controls:
+     - `Adjust Box`
+     - `Reset Box`
+  2. Added guide-box edit mode in `drawing-canvas.js`:
+     - drag inside the target box to move it
+     - drag corner handles to resize it
+     - drawing input is paused while box-edit mode is active
+  3. Added per-task guide-box persistence in `main.js`:
+     - stores user-adjusted target boxes in localStorage under `fontto-guide-boxes-v1`
+     - re-applies the saved box when the same guided task is opened again
+     - reset removes the override and restores the default guide box
+- Validation:
+  - `npm run build` passes after the guide-box editing changes.
+- Current state:
+  1. Users can now tune the target box interactively on the canvas.
+  2. Guide-box changes persist per guided task across reloads.
+  3. The current edit interaction supports move + corner resize, which is enough for first-pass tuning.
+- Next recommended tasks:
+  1. Manually test the box-edit interaction on touch and stylus devices to confirm handle hit size is comfortable.
+  2. If users need finer control, add edge handles in addition to corner handles.
+  3. Consider showing a short inline hint when guide-box edit mode is active.
+---
+
+- Date: 2026-04-26
+- Request: Reduce visible thickness mismatch between consonants and vowels in composed preview glyphs such as `가`.
+- Scope:
+  - `D:\fontto\src\core\composer.js`
+  - `D:\fontto\ANTIGRAVITY_WORKLOG.md`
+- Implemented:
+  1. Switched core composition placement from direct slot scaling to bounds-based uniform fitting for:
+     - initials
+     - medials
+     - single finals
+     - final-cluster assets
+  2. Reused the existing `fitCommandsToSlot()` path so composed glyph parts are centered into their slots without non-uniform distortion.
+  3. Kept slot layout positions intact while changing only the fitting strategy.
+- Validation:
+  - `npm run build` passes after the composition-fit change.
+- Current state:
+  1. Composed preview glyphs should preserve the original drawn proportions more faithfully.
+  2. Visual thickness mismatch caused by slot-specific x/y distortion should be reduced.
+  3. Layout spacing is still slot-driven, so further tuning may still be needed for dense combinations.
+- Next recommended tasks:
+  1. Compare `가`, `너`, `호`, `활`, and a few final-heavy syllables in preview to confirm the fit change improves balance broadly.
+  2. If some classes still look uneven, tune the slot rectangles rather than reintroducing non-uniform scaling.
+  3. Consider applying the same “uniform fit first” principle to more derived-composition paths if additional imbalance shows up there.

@@ -12,7 +12,7 @@ import {
   getJungInfo,
   getJongInfo,
 } from './hangul.js';
-import { transformCommands, mergeCommands } from './jamo-derive.js';
+import { mergeCommands } from './jamo-derive.js';
 
 const UPM = 1000;
 const COMPOSITION_CONTEXT = {
@@ -235,11 +235,7 @@ function composeJongCommands(jongIdx, jungIdx, layout, jamoLib) {
     const jongCmds = getJongCommands(jongIdx, jungIdx, jamoLib, 'single');
     if (jongCmds.length === 0) return [];
 
-    return transformCommands(
-      jongCmds,
-      jongSlot.w, jongSlot.h,
-      jongSlot.x * UPM, jongSlot.y * UPM
-    );
+    return fitCommandsToSlot(jongCmds, jongSlot);
   }
 
   const clusterCommands = resolveCommands(jamoLib, [
@@ -248,11 +244,7 @@ function composeJongCommands(jongIdx, jungIdx, layout, jamoLib) {
     `jong_cluster_${COMPOSITION_CONTEXT.CVC_COMPOUND}_${jongInfo.base}`,
   ]);
   if (clusterCommands.length > 0) {
-    return transformCommands(
-      clusterCommands,
-      jongSlot.w, jongSlot.h,
-      jongSlot.x * UPM, jongSlot.y * UPM
-    );
+    return fitCommandsToSlot(clusterCommands, jongSlot);
   }
 
   const [leftJamo, rightJamo] = jongInfo.components;
@@ -299,14 +291,12 @@ export function composeSyllable(choIdx, jungIdx, jongIdx, jamoLib) {
 
   const choCmds = getChoCommands(choIdx, jungIdx, jongIdx, jamoLib);
   if (choCmds.length > 0) {
-    const l = layout.cho;
-    result.push(...transformCommands(choCmds, l.w, l.h, l.x * UPM, l.y * UPM));
+    result.push(...fitCommandsToSlot(choCmds, layout.cho));
   }
 
   const jungCmds = getJungCommands(jungIdx, jongIdx, jamoLib);
   if (jungCmds.length > 0) {
-    const l = layout.jung;
-    result.push(...transformCommands(jungCmds, l.w, l.h, l.x * UPM, l.y * UPM));
+    result.push(...fitCommandsToSlot(jungCmds, layout.jung));
   }
 
   if (jongIdx > 0 && layout.jong) {

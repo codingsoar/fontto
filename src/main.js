@@ -25,6 +25,7 @@ import {
 
 const STORAGE_KEY = 'fontto-jamo-lib-v1';
 const DRAFT_STORAGE_KEY = 'fontto-jamo-drafts-v1';
+const GUIDE_BOX_STORAGE_KEY = 'fontto-guide-boxes-v1';
 const RECENT_REVIEW_LIMIT = 8;
 const COMMON_REVIEW_CHARS = [
   '\uAC00', '\uB098', '\uB2E4', '\uB77C', '\uB9C8', '\uBC14', '\uC0AC', '\uC544',
@@ -34,6 +35,7 @@ const COMMON_REVIEW_CHARS = [
 ];
 class FonttoApp {
   jamoDrafts = {};
+  guideOverrides = {};
 
   constructor() {
     this.jamoLib = {};        // 자모 Path 커맨드 라이브러리
@@ -41,6 +43,7 @@ class FonttoApp {
     this.reviewState = this._getDefaultReviewState();
     this.reviewReturnContext = null;
     this.recentEditedKeys = [];
+    this.currentSelectionKey = null;
 
     this.drawingCanvas = null;
     this.jamoGrid = null;
@@ -114,8 +117,8 @@ class FonttoApp {
             <span class="current-jamo-label" id="currentJamoLabel">Select a guided task.</span>
           </div>
           <div class="header-right">
-            <button class="header-btn is-hidden" id="returnToReviewBtn">Back to Review</button>
-            <button class="header-btn" id="reviewBtn" disabled>Review</button>
+            <button class="header-btn is-hidden" id="returnToReviewBtn">Back to Full Set Review</button>
+            <button class="header-btn" id="reviewBtn" disabled>Review Full Set</button>
             <button class="header-btn" id="previewBtn">Preview</button>
             <button class="header-btn primary" id="generateBtn" disabled>Generate Font</button>
           </div>
@@ -143,6 +146,7 @@ class FonttoApp {
     this.drawingCanvas = new DrawingCanvas(canvasEl, {
       penSize: 8,
       onChange: (report) => this._updateQualityPanel(report),
+      onGuideRegionChange: (region) => this._handleGuideRegionChange(region),
     });
 
     // 자모 그리드 초기화
@@ -165,6 +169,8 @@ class FonttoApp {
       onClear: () => this.drawingCanvas.clear(),
       onPenSize: (size) => this.drawingCanvas.setPenSize(size),
       onVariableWidth: (v) => this.drawingCanvas.setVariableWidth(v),
+      onToggleGuideEdit: (enabled) => this.drawingCanvas.setGuideEditMode(enabled),
+      onResetGuideBox: () => this._resetGuideRegionForCurrentSelection(),
       onSave: () => this._saveCurrentJamo(),
       onNext: () => this._saveAndNext(),
     });
@@ -199,13 +205,14 @@ class FonttoApp {
     }
 
     const key = `${catId}_${jamo}`;
+    this.currentSelectionKey = this._getGuideOverrideKey(catId, key, guide);
     const draft = this.jamoDrafts[key];
     if (draft?.strokes?.length) {
       this.drawingCanvas.loadStrokes(draft.strokes);
     } else {
       this.drawingCanvas.clear();
     }
-    this.drawingCanvas.setGuide(guide ?? { char: example });
+    this.drawingCanvas.setGuide(this._applyGuideOverride(catId, key, guide ?? { char: example }));
     this._updateQualityPanel(this.drawingCanvas.getQualityReport());
   }
   _saveCurrentJamo(options = {}) {
@@ -307,7 +314,7 @@ class FonttoApp {
     overlay.innerHTML = `
       <div class="modal review-modal">
         <div class="modal-header">
-          <h2>Glyph Review</h2>
+          <h2>Full Set Review</h2>
           <button class="modal-close" id="closeReviewModal">x</button>
         </div>
         <div class="modal-body review-body">
@@ -705,7 +712,9 @@ class FonttoApp {
     const jongInfo = getJongInfo(jongIdx);
 
     targets.push({
-      categoryId: vowelCategory === 'vertical' ? 'cho_v' : 'cho_h',
+      categoryId: jongIdx > 0
+        ? (vowelCategory === 'vertical' ? 'cho_v_wf' : 'cho_h_wf')
+        : (vowelCategory === 'vertical' ? 'cho_v' : 'cho_h'),
       jamo: choInfo.base,
       label: `초성 ${choInfo.base} 수정`,
     });
@@ -725,7 +734,7 @@ class FonttoApp {
     if (jongIdx > 0) {
       if (jongInfo?.isCompound) {
         targets.push({
-          categoryId: 'jong_cluster',
+          categoryId: vowelCategory === 'horizontal' ? 'jong_cluster_h' : 'jong_cluster',
           jamo: jongInfo.base,
           label: `복합 종성 ${jongInfo.base} 수정`,
         });
@@ -741,7 +750,7 @@ class FonttoApp {
 
       jongItems.forEach((jamo, index) => {
         targets.push({
-          categoryId: 'jong',
+          categoryId: vowelCategory === 'horizontal' ? 'jong_h' : 'jong',
           jamo,
           label: `Final ${jamo} edit${jongItems.length > 1 ? ` ${index + 1}` : ''}`,
         });
@@ -985,6 +994,14 @@ class FonttoApp {
           this.jamoDrafts = parsedDrafts;
         }
       }
+
+      const guideRaw = window.localStorage.getItem(GUIDE_BOX_STORAGE_KEY);
+      if (guideRaw) {
+        const parsedGuides = JSON.parse(guideRaw);
+        if (parsedGuides && typeof parsedGuides === 'object') {
+          this.guideOverrides = parsedGuides;
+        }
+      }
     } catch (error) {
       console.warn('Failed to load saved jamo library:', error);
     }
@@ -994,9 +1011,56 @@ class FonttoApp {
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(this.jamoLib));
       window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(this.jamoDrafts));
+      window.localStorage.setItem(GUIDE_BOX_STORAGE_KEY, JSON.stringify(this.guideOverrides));
     } catch (error) {
       console.warn('Failed to persist jamo library:', error);
     }
+  }
+
+  _applyGuideOverride(categoryId, itemKey, guide) {
+    if (!guide) return guide;
+    const overrideKey = this._getGuideOverrideKey(categoryId, itemKey, guide);
+    const override = guide.overrideScope === 'item'
+      ? this.guideOverrides[overrideKey]
+      : this.guideOverrides[overrideKey] || this.guideOverrides[itemKey];
+    if (!override) return guide;
+
+    return {
+      ...guide,
+      targetRegion: { ...override },
+    };
+  }
+
+  _handleGuideRegionChange(region) {
+    if (!this.currentSelectionKey) return;
+
+    if (region) {
+      this.guideOverrides[this.currentSelectionKey] = { ...region };
+    } else {
+      delete this.guideOverrides[this.currentSelectionKey];
+    }
+
+    this._persistJamoLib();
+  }
+
+  _resetGuideRegionForCurrentSelection() {
+    const selection = this.jamoGrid?.getCurrentSelection();
+    if (!selection) return;
+
+    delete this.guideOverrides[
+      this._getGuideOverrideKey(
+        selection.categoryId,
+        `${selection.categoryId}_${selection.jamo}`,
+        selection.guide
+      )
+    ];
+    this._persistJamoLib();
+    this.drawingCanvas.resetGuideTargetRegion(false);
+    this._showToast('Target box reset to the default guide.', 'success', 1800);
+  }
+
+  _getGuideOverrideKey(categoryId, itemKey, guide) {
+    return guide?.overrideScope === 'item' ? itemKey : categoryId;
   }
 
   _getStorageKeysForSelection(selection) {

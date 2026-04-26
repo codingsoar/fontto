@@ -18,6 +18,9 @@ export class DrawingCanvas {
     this.penMode = options.penMode || 'pen';
     this.variableWidth = options.variableWidth || false;
     this.onChange = typeof options.onChange === 'function' ? options.onChange : null;
+    this.onGuideRegionChange = typeof options.onGuideRegionChange === 'function'
+      ? options.onGuideRegionChange
+      : null;
 
     this.strokes = [];
     this.currentStroke = null;
@@ -31,6 +34,10 @@ export class DrawingCanvas {
     this.guideTargetIndices = [];
     this.guideLabel = '';
     this.guideTargetRegion = null;
+    this.defaultGuideTargetRegion = null;
+    this.guideQualityProfile = null;
+    this.isGuideEditMode = false;
+    this.guideEditDrag = null;
 
     this._bindEvents();
     requestAnimationFrame(() => {
@@ -75,6 +82,14 @@ export class DrawingCanvas {
     if (this.activePointerId !== null) return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
 
+    if (this.isGuideEditMode && this.guideTargetRegion) {
+      e.preventDefault();
+      this.activePointerId = e.pointerId;
+      this.canvas.setPointerCapture(e.pointerId);
+      this._startGuideEdit(e);
+      return;
+    }
+
     e.preventDefault();
     this.activePointerId = e.pointerId;
     this.canvas.setPointerCapture(e.pointerId);
@@ -85,6 +100,10 @@ export class DrawingCanvas {
     if (!this._isActivePointer(e)) return;
 
     e.preventDefault();
+    if (this.isGuideEditMode && this.guideEditDrag) {
+      this._continueGuideEdit(e);
+      return;
+    }
     this._continueStroke(e);
   }
 
@@ -92,6 +111,16 @@ export class DrawingCanvas {
     if (!this._isActivePointer(e)) return;
 
     e.preventDefault();
+    if (this.isGuideEditMode && this.guideEditDrag) {
+      this._continueGuideEdit(e);
+      this.activePointerId = null;
+      this._endGuideEdit();
+      if (this.canvas.hasPointerCapture(e.pointerId)) {
+        this.canvas.releasePointerCapture(e.pointerId);
+      }
+      return;
+    }
+
     this._continueStroke(e);
     if (this.canvas.hasPointerCapture(e.pointerId)) {
       this.canvas.releasePointerCapture(e.pointerId);
@@ -217,7 +246,35 @@ export class DrawingCanvas {
     this.guideSequence = guide.sequence || [];
     this.guideTargetIndices = guide.targetIndices || [];
     this.guideLabel = guide.label || '';
-    this.guideTargetRegion = guide.targetRegion || null;
+    this.defaultGuideTargetRegion = guide.targetRegion ? { ...guide.targetRegion } : null;
+    this.guideTargetRegion = guide.targetRegion ? { ...guide.targetRegion } : null;
+    this.guideQualityProfile = guide.qualityProfile || null;
+    this.guideEditDrag = null;
+    this.canvas.style.cursor = this.isGuideEditMode ? 'move' : 'crosshair';
+    this.render();
+    this._emitChange();
+  }
+
+  setGuideEditMode(enabled) {
+    this.isGuideEditMode = !!enabled;
+    this.guideEditDrag = null;
+    this.canvas.style.cursor = this.isGuideEditMode ? 'move' : 'crosshair';
+    this.render();
+  }
+
+  resetGuideTargetRegion(emitOverride = true) {
+    this.guideTargetRegion = this.defaultGuideTargetRegion ? { ...this.defaultGuideTargetRegion } : null;
+    this.guideEditDrag = null;
+    this.render();
+    if (emitOverride) {
+      this._emitGuideRegionChange();
+    }
+    this._emitChange();
+  }
+
+  setGuideTargetRegion(region) {
+    this.guideTargetRegion = region ? { ...region } : null;
+    this.guideEditDrag = null;
     this.render();
     this._emitChange();
   }
@@ -281,6 +338,10 @@ export class DrawingCanvas {
       ctx.lineWidth = 2;
       ctx.strokeRect(box.x, box.y, box.w, box.h);
 
+      if (this.isGuideEditMode) {
+        this._drawGuideEditHandles(box);
+      }
+
       if (this.guideLabel) {
         ctx.save();
         ctx.fillStyle = 'rgba(124, 92, 252, 0.96)';
@@ -318,6 +379,25 @@ export class DrawingCanvas {
 
       ctx.restore();
     }
+  }
+
+  _drawGuideEditHandles(box) {
+    const ctx = this.ctx;
+    const handles = this._getGuideEditHandles(box);
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
+    ctx.strokeStyle = 'rgba(124, 92, 252, 1)';
+    ctx.lineWidth = 1.5;
+
+    for (const handle of handles) {
+      ctx.beginPath();
+      ctx.rect(handle.x - 5, handle.y - 5, 10, 10);
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    ctx.restore();
   }
 
   _drawStroke(stroke, isActive = false) {
@@ -577,6 +657,7 @@ export class DrawingCanvas {
     const pointCount = points.length;
     const innerBox = this._getGuideInnerBox();
     const targetBox = this._getGuideTargetBox();
+    const qualityProfile = this._getQualityProfile();
 
     const report = {
       hasContent: pointCount > 0,
@@ -590,7 +671,7 @@ export class DrawingCanvas {
     };
 
     if (!report.bounds || !targetBox) {
-      if (report.hasContent && this._isSparseInput(processedStrokes, null)) {
+      if (report.hasContent && this._isSparseInput(processedStrokes, null, qualityProfile)) {
         report.warnings.push({
           code: 'low_stroke_detail',
           severity: 'medium',
@@ -642,7 +723,11 @@ export class DrawingCanvas {
       totalLength,
     };
 
-    if (fillRatio < 0.14 || coverageX < 0.24 || coverageY < 0.24) {
+    if (
+      fillRatio < qualityProfile.minFillRatio
+      || coverageX < qualityProfile.minCoverageX
+      || coverageY < qualityProfile.minCoverageY
+    ) {
       report.warnings.push({
         code: 'too_small',
         severity: 'high',
@@ -650,7 +735,7 @@ export class DrawingCanvas {
       });
     }
 
-    if (overflowRatio > 0.28) {
+    if (overflowRatio > qualityProfile.maxOverflowRatio) {
       report.warnings.push({
         code: 'overflow',
         severity: 'high',
@@ -658,7 +743,7 @@ export class DrawingCanvas {
       });
     }
 
-    if (this._isSparseInput(processedStrokes, targetBox)) {
+    if (this._isSparseInput(processedStrokes, targetBox, qualityProfile)) {
       report.warnings.push({
         code: 'low_stroke_detail',
         severity: 'medium',
@@ -666,7 +751,7 @@ export class DrawingCanvas {
       });
     }
 
-    if (centerOffsetX > 0.26 || centerOffsetY > 0.26) {
+    if (centerOffsetX > qualityProfile.maxCenterOffsetX || centerOffsetY > qualityProfile.maxCenterOffsetY) {
       report.warnings.push({
         code: 'off_center',
         severity: 'medium',
@@ -674,7 +759,9 @@ export class DrawingCanvas {
       });
     }
 
-    if ((coverageX < 0.18 && coverageY > 0.72) || (coverageY < 0.18 && coverageX > 0.72)) {
+    const thinX = coverageX < qualityProfile.thinCoverageMin && coverageY > qualityProfile.strongCoverageMin;
+    const thinY = coverageY < qualityProfile.thinCoverageMin && coverageX > qualityProfile.strongCoverageMin;
+    if ((thinX && !qualityProfile.allowThinX) || (thinY && !qualityProfile.allowThinY)) {
       report.warnings.push({
         code: 'skewed_shape',
         severity: 'medium',
@@ -700,22 +787,41 @@ export class DrawingCanvas {
     return total;
   }
 
-  _isSparseInput(strokes, targetBox) {
+  _isSparseInput(strokes, targetBox, qualityProfile = this._getQualityProfile()) {
     const pointCount = strokes.reduce((sum, stroke) => sum + stroke.length, 0);
     const totalLength = this._getTotalStrokeLength(strokes);
     const minTargetSpan = targetBox
       ? Math.min(targetBox.w, targetBox.h)
       : Math.min(this.displayWidth || 0, this.displayHeight || 0);
 
-    if (pointCount <= 5) {
+    if (pointCount <= qualityProfile.sparsePointCount) {
       return true;
     }
 
-    if (strokes.length === 1 && pointCount <= 8) {
+    if (strokes.length === 1 && pointCount <= qualityProfile.sparseSingleStrokePointCount) {
       return true;
     }
 
-    return minTargetSpan > 0 && totalLength < minTargetSpan * 0.32;
+    return minTargetSpan > 0 && totalLength < minTargetSpan * qualityProfile.sparseLengthRatio;
+  }
+
+  _getQualityProfile() {
+    return {
+      minFillRatio: 0.14,
+      minCoverageX: 0.24,
+      minCoverageY: 0.24,
+      maxOverflowRatio: 0.28,
+      maxCenterOffsetX: 0.26,
+      maxCenterOffsetY: 0.26,
+      sparsePointCount: 5,
+      sparseSingleStrokePointCount: 8,
+      sparseLengthRatio: 0.32,
+      thinCoverageMin: 0.18,
+      strongCoverageMin: 0.72,
+      allowThinX: false,
+      allowThinY: false,
+      ...(this.guideQualityProfile || {}),
+    };
   }
 
   _getProcessedStroke(stroke) {
@@ -807,6 +913,128 @@ export class DrawingCanvas {
     };
   }
 
+  _getGuideEditHandles(box) {
+    return [
+      { type: 'nw', x: box.x, y: box.y },
+      { type: 'ne', x: box.x + box.w, y: box.y },
+      { type: 'sw', x: box.x, y: box.y + box.h },
+      { type: 'se', x: box.x + box.w, y: box.y + box.h },
+    ];
+  }
+
+  _startGuideEdit(e) {
+    const point = this._getPos(e);
+    const box = this._getGuideTargetBox();
+    if (!box) return;
+
+    const handle = this._getGuideHandleAtPoint(point, box);
+    const mode = handle || (this._isPointInsideRect(point, box) ? 'move' : null);
+    if (!mode) {
+      this.activePointerId = null;
+      if (this.canvas.hasPointerCapture(e.pointerId)) {
+        this.canvas.releasePointerCapture(e.pointerId);
+      }
+      return;
+    }
+
+    this.guideEditDrag = {
+      mode,
+      startPoint: point,
+      startRegion: { ...this.guideTargetRegion },
+      startBox: box,
+    };
+    this.canvas.style.cursor = this._getCursorForGuideMode(mode);
+  }
+
+  _continueGuideEdit(e) {
+    if (!this.guideEditDrag || !this.guideTargetRegion) return;
+
+    const point = this._getPos(e);
+    const inner = this._getGuideInnerBox();
+    if (!inner.w || !inner.h) return;
+
+    const dx = (point.x - this.guideEditDrag.startPoint.x) / inner.w;
+    const dy = (point.y - this.guideEditDrag.startPoint.y) / inner.h;
+    const minSize = 0.08;
+    const region = { ...this.guideEditDrag.startRegion };
+
+    switch (this.guideEditDrag.mode) {
+      case 'move':
+        region.x += dx;
+        region.y += dy;
+        break;
+      case 'nw':
+        region.x += dx;
+        region.y += dy;
+        region.w -= dx;
+        region.h -= dy;
+        break;
+      case 'ne':
+        region.y += dy;
+        region.w += dx;
+        region.h -= dy;
+        break;
+      case 'sw':
+        region.x += dx;
+        region.w -= dx;
+        region.h += dy;
+        break;
+      case 'se':
+        region.w += dx;
+        region.h += dy;
+        break;
+    }
+
+    const next = this._clampGuideRegion(region, minSize);
+    this.guideTargetRegion = next;
+    this.render();
+    this._emitChange();
+  }
+
+  _endGuideEdit() {
+    const mode = this.guideEditDrag?.mode;
+    this.guideEditDrag = null;
+    this.canvas.style.cursor = this.isGuideEditMode ? this._getCursorForGuideMode(mode || 'move') : 'crosshair';
+    this._emitGuideRegionChange();
+  }
+
+  _getGuideHandleAtPoint(point, box) {
+    const threshold = 14;
+    for (const handle of this._getGuideEditHandles(box)) {
+      const dx = point.x - handle.x;
+      const dy = point.y - handle.y;
+      if (Math.sqrt(dx * dx + dy * dy) <= threshold) {
+        return handle.type;
+      }
+    }
+    return null;
+  }
+
+  _getCursorForGuideMode(mode) {
+    switch (mode) {
+      case 'nw':
+      case 'se':
+        return 'nwse-resize';
+      case 'ne':
+      case 'sw':
+        return 'nesw-resize';
+      case 'move':
+      default:
+        return 'move';
+    }
+  }
+
+  _clampGuideRegion(region, minSize) {
+    const next = { ...region };
+    next.w = Math.max(next.w, minSize);
+    next.h = Math.max(next.h, minSize);
+    next.x = Math.min(Math.max(next.x, 0), 1 - next.w);
+    next.y = Math.min(Math.max(next.y, 0), 1 - next.h);
+    next.w = Math.min(next.w, 1 - next.x);
+    next.h = Math.min(next.h, 1 - next.y);
+    return next;
+  }
+
   _getIntersectionRect(a, b) {
     const x1 = Math.max(a.minX, b.x);
     const y1 = Math.max(a.minY, b.y);
@@ -844,6 +1072,12 @@ export class DrawingCanvas {
   _emitChange() {
     if (this.onChange) {
       this.onChange(this.getQualityReport());
+    }
+  }
+
+  _emitGuideRegionChange() {
+    if (typeof this.onGuideRegionChange === 'function') {
+      this.onGuideRegionChange(this.guideTargetRegion ? { ...this.guideTargetRegion } : null);
     }
   }
 
