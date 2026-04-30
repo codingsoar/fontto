@@ -19,92 +19,113 @@ import { getCompositionLayout } from '../core/composer.js';
 const COMPOSITION_CONTEXT_MAP = {
   cho_v: 'cv',
   cho_h: 'cv',
-  cho_v_wf: 'cvc_simple',
-  cho_h_wf: 'cvc_simple',
+  cho_m: 'cv',
   jung_nb: 'cv',
   jung_wb: 'cvc_simple',
 };
 
 const syllable = (cho, jung, jong = 0) => String.fromCharCode(0xAC00 + (cho * 21 + jung) * 28 + jong);
 const findChoIndex = (jamo) => CHO.findIndex((item) => item === jamo);
+const findJungIndex = (jamo) => JUNG.findIndex((item) => item === jamo);
 const findJongIndex = (jamo) => JONG.findIndex((item) => item === jamo);
-const choExamples = (jung, jong = 0) => BASIC_CONSONANTS.map((jamo) => syllable(findChoIndex(jamo), jung, jong));
-const jongExamples = (jung, items) => items.map((jamo) => syllable(0, jung, findJongIndex(jamo)));
+
+const choExamples = (jungIdx, jongIdx = 0) => CHO.map((jamo) => syllable(findChoIndex(jamo), jungIdx, jongIdx));
+const jungExamples = (jongIdx = 0) => JUNG.map((jamo) => syllable(0, findJungIndex(jamo), jongIdx));
+const jongExamples = (jungIdx) => JONG.slice(1).map((jamo) => syllable(0, jungIdx, findJongIndex(jamo)));
 
 export const CATEGORIES = [
   {
     id: 'cho_v',
-    label: 'Initial (vertical vowel)',
-    items: BASIC_CONSONANTS,
-    examples: choExamples(0),
-    guideType: 'cho',
-  },
-  {
-    id: 'cho_h',
-    label: 'Initial (horizontal vowel)',
-    items: BASIC_CONSONANTS,
-    examples: choExamples(18),
+    label: 'Initial (Vertical Vowel)',
+    items: CHO,
+    examples: choExamples(0), // ㅏ
     guideType: 'cho',
   },
   {
     id: 'cho_v_wf',
-    label: 'Initial (vertical vowel + final)',
-    items: BASIC_CONSONANTS,
-    examples: choExamples(0, 1),
+    label: 'Initial (Vertical + Final)',
+    items: CHO,
+    examples: choExamples(0, 1), // 각
     guideType: 'cho',
-    required: false,
+  },
+  {
+    id: 'cho_h',
+    label: 'Initial (Horizontal Vowel)',
+    items: CHO,
+    examples: choExamples(18), // ㅡ
+    guideType: 'cho',
   },
   {
     id: 'cho_h_wf',
-    label: 'Initial (horizontal vowel + final)',
-    items: BASIC_CONSONANTS,
-    examples: choExamples(18, 1),
+    label: 'Initial (Horizontal + Final)',
+    items: CHO,
+    examples: choExamples(18, 1), // 극
     guideType: 'cho',
-    required: false,
+  },
+  {
+    id: 'cho_m',
+    label: 'Initial (Complex Vowel)',
+    items: CHO,
+    examples: choExamples(9), // ㅘ
+    guideType: 'cho',
+  },
+  {
+    id: 'cho_m_wf',
+    label: 'Initial (Complex + Final)',
+    items: CHO,
+    examples: choExamples(9, 1), // 꽉
+    guideType: 'cho',
   },
   {
     id: 'jung_nb',
-    label: 'Medial (no final)',
-    items: BASIC_VOWELS,
-    examples: [syllable(0, 0), syllable(0, 2), syllable(0, 4), syllable(0, 6), syllable(0, 8), syllable(0, 12), syllable(0, 13), syllable(0, 17), syllable(0, 18), syllable(0, 20)],
+    label: 'Medial (No Final)',
+    items: JUNG,
+    examples: jungExamples(0),
     guideType: 'jung',
     guideOverrideScope: 'item',
   },
   {
     id: 'jung_wb',
-    label: 'Medial (with final)',
-    items: BASIC_VOWELS,
-    examples: [syllable(0, 0, 1), syllable(0, 2, 1), syllable(0, 4, 1), syllable(0, 6, 1), syllable(0, 8, 1), syllable(0, 12, 1), syllable(0, 13, 1), syllable(0, 17, 1), syllable(0, 18, 1), syllable(0, 20, 1)],
+    label: 'Medial (With Final)',
+    items: JUNG,
+    examples: jungExamples(1), // ㄱ 받침
     guideType: 'jung',
   },
   {
-    id: 'jong',
-    label: 'Final (single)',
-    items: BASIC_CONSONANTS,
-    examples: jongExamples(0, BASIC_CONSONANTS),
+    id: 'jong_v',
+    label: 'Final (Vertical Vowel)',
+    items: JONG.slice(1),
+    examples: jongExamples(0), // ㅏ
     guideType: 'jong',
-  },
-  {
-    id: 'jong_cluster',
-    label: 'Final (cluster)',
-    items: COMPOUND_JONG_CLUSTERS,
-    examples: jongExamples(0, COMPOUND_JONG_CLUSTERS),
-    guideType: 'jong_cluster',
   },
   {
     id: 'jong_h',
-    label: 'Final (after horizontal medial)',
-    items: BASIC_CONSONANTS,
-    examples: jongExamples(18, BASIC_CONSONANTS),
+    label: 'Final (Horizontal Vowel)',
+    items: JONG.slice(1),
+    examples: jongExamples(18), // ㅡ
     guideType: 'jong',
+  },
+  {
+    id: 'jong_m',
+    label: 'Final (Complex Vowel)',
+    items: JONG.slice(1),
+    examples: jongExamples(9), // ㅘ
+    guideType: 'jong',
+  },
+  {
+    id: 'ascii_upper',
+    label: 'Uppercase (A-Z)',
+    items: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split(''),
+    examples: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split(''),
+    guideType: 'ascii',
     required: false,
   },
   {
-    id: 'jong_cluster_h',
-    label: 'Final cluster (after horizontal medial)',
-    items: COMPOUND_JONG_CLUSTERS,
-    examples: jongExamples(18, COMPOUND_JONG_CLUSTERS),
-    guideType: 'jong_cluster',
+    id: 'ascii_digit',
+    label: 'Digits (0-9)',
+    items: '0123456789'.split(''),
+    examples: '0123456789'.split(''),
+    guideType: 'ascii',
     required: false,
   },
 ];
@@ -123,23 +144,9 @@ function getGuideSequence(char) {
     return [char];
   }
 
-  const choInfo = getChoInfo(info.cho);
-  const jungInfo = getJungInfo(info.jung);
-  const jongInfo = getJongInfo(info.jong);
-  const sequence = [choInfo.base];
-
-  if (jungInfo.isCompound && jungInfo.components?.length) {
-    sequence.push(...jungInfo.components);
-  } else {
-    sequence.push(JUNG[info.jung]);
-  }
-
+  const sequence = [CHO[info.cho], JUNG[info.jung]];
   if (info.jong > 0) {
-    if (jongInfo?.isCompound && jongInfo.components?.length) {
-      sequence.push(...jongInfo.components);
-    } else {
-      sequence.push(JONG[info.jong]);
-    }
+    sequence.push(JONG[info.jong]);
   }
 
   return sequence;
@@ -237,15 +244,11 @@ export function buildGuideMeta(categoryId, jamo, example) {
     case 'cho':
       guide.targetIndices = [0];
       guide.label = `Target initial ${jamo}`;
-      guide.targetRegion = categoryId === 'cho_h_wf'
-        ? (extendRegionBottomToMidline(canvasLayout?.cho) ?? { x: 0.14, y: 0.12, w: 0.72, h: 0.38 })
-        : (canvasLayout?.cho ?? (categoryId.includes('_h')
-          ? { x: 0.14, y: 0.50, w: 0.72, h: 0.38 }
-          : { x: 0.08, y: 0.11, w: 0.42, h: 0.79 }));
-      guide.storageKeys = COMPOSITION_CONTEXT_MAP[categoryId]
-        ? [`${categoryId}_${jamo}`, `cho_${categoryId.includes('_h') ? 'h' : 'v'}_${COMPOSITION_CONTEXT_MAP[categoryId]}_${jamo}`]
-        : [`${categoryId}_${jamo}`];
-      guide.qualityProfile = categoryId.includes('_h')
+      guide.targetRegion = canvasLayout?.cho ?? (categoryId.includes('_h') || categoryId.includes('_m')
+        ? { x: 0.14, y: 0.50, w: 0.72, h: 0.38 }
+        : { x: 0.08, y: 0.11, w: 0.42, h: 0.79 });
+      guide.storageKeys = [`${categoryId}_${jamo}`];
+      guide.qualityProfile = categoryId.includes('_h') || categoryId.includes('_m')
         ? createQualityProfile({
           minFillRatio: 0.11,
           minCoverageY: 0.18,
@@ -259,24 +262,17 @@ export function buildGuideMeta(categoryId, jamo, example) {
           allowThinX: true,
         });
       return guide;
-    case 'jung': {
-      const composed = info !== null && getJungInfo(info.jung).isCompound;
-      guide.targetIndices = composed ? [1, 2].slice(0, sequence.length - (info?.jong > 0 ? 1 : 0)) : [1];
+    case 'jung':
+      guide.targetIndices = [1];
       guide.label = `Target medial ${jamo}`;
-      guide.targetRegion = (categoryId === 'jung_nb' && isHorizontal)
-        ? (extendRegionTopToMidline(canvasLayout?.jung) ?? { x: 0.16, y: 0.5, w: 0.68, h: 0.36 })
-        : (canvasLayout?.jung ?? (categoryId === 'jung_nb'
-        ? (isCompoundVowel
-          ? { x: 0.16, y: 0.12, w: 0.70, h: 0.73 }
-          : isHorizontal
+      guide.targetRegion = categoryId === 'jung_nb'
+        ? (isHorizontal
             ? { x: 0.16, y: 0.12, w: 0.68, h: 0.24 }
             : { x: 0.47, y: 0.08, w: 0.39, h: 0.82 })
-        : (isCompoundVowel
-          ? { x: 0.16, y: 0.30, w: 0.70, h: 0.50 }
-          : isHorizontal
+        : (isHorizontal
             ? { x: 0.16, y: 0.39, w: 0.68, h: 0.18 }
-            : { x: 0.47, y: 0.43, w: 0.38, h: 0.47 })));
-      guide.storageKeys = [`${categoryId}_${jamo}`, `${categoryId}_${COMPOSITION_CONTEXT_MAP[categoryId]}_${jamo}`];
+            : { x: 0.47, y: 0.43, w: 0.38, h: 0.47 });
+      guide.storageKeys = [`${categoryId}_${jamo}`];
       guide.qualityProfile = isHorizontal
         ? createQualityProfile({
           minFillRatio: isCompoundVowel ? 0.1 : 0.07,
@@ -293,14 +289,11 @@ export function buildGuideMeta(categoryId, jamo, example) {
           allowThinX: true,
         });
       return guide;
-    }
     case 'jong':
       guide.targetIndices = [sequence.length - 1];
       guide.label = `Target final ${jamo}`;
       guide.targetRegion = pinFinalRegionToMidline(canvasLayout?.jong) ?? { x: 0.15, y: 0.5, w: 0.68, h: 0.32 };
-      guide.storageKeys = categoryId === 'jong_h'
-        ? [`${categoryId}_${jamo}`, `jong_single_horizontal_${jamo}`]
-        : [`${categoryId}_${jamo}`, `jong_single_${jamo}`];
+      guide.storageKeys = [`${categoryId}_${jamo}`];
       guide.qualityProfile = createQualityProfile({
         minFillRatio: 0.08,
         minCoverageY: 0.12,
@@ -308,19 +301,17 @@ export function buildGuideMeta(categoryId, jamo, example) {
         sparseLengthRatio: 0.22,
         allowThinY: true,
       });
-      return guide;
-    case 'jong_cluster':
-      guide.targetIndices = sequence.length >= 4 ? [2, 3] : [sequence.length - 1];
-      guide.label = `Target final cluster ${jamo}`;
-      guide.targetRegion = pinFinalRegionToMidline(canvasLayout?.jong) ?? { x: 0.14, y: 0.5, w: 0.72, h: 0.35 };
-      guide.storageKeys = categoryId === 'jong_cluster_h'
-        ? [`${categoryId}_${jamo}`, `jong_cluster_horizontal_${jamo}`]
-        : [`${categoryId}_${jamo}`, `jong_cluster_${jamo}`, `jong_cluster_cvc_compound_${jamo}`];
+    case 'ascii':
+      guide.targetIndices = [0];
+      guide.label = `Draw ${jamo}`;
+      guide.targetRegion = { x: 0.1, y: 0.1, w: 0.8, h: 0.8 };
+      guide.storageKeys = [`${categoryId}_${jamo}`, `ascii_${jamo}`];
       guide.qualityProfile = createQualityProfile({
-        minFillRatio: 0.1,
-        minCoverageY: 0.14,
-        maxCenterOffsetY: 0.3,
-        sparseLengthRatio: 0.26,
+        minFillRatio: 0.05,
+        minCoverageX: 0.12,
+        minCoverageY: 0.12,
+        maxOverflowRatio: 0.35,
+        sparsePointCount: 3,
       });
       return guide;
     default:
@@ -440,7 +431,7 @@ export class JamoGrid {
       card.innerHTML = `
         <span class="jamo-char">${jamo}</span>
         <span class="jamo-example">${example}</span>
-        ${isCompleted ? '<span class="jamo-check">?</span>' : ''}
+        ${isCompleted ? '<span class="jamo-check">✓</span>' : ''}
       `;
 
       card.addEventListener('click', () => {

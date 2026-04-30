@@ -182,14 +182,21 @@ export class PreviewPanel {
     const value = this.browserInput?.value.trim();
     if (!value) return;
 
-    const index = this._getAllSyllables().indexOf(value);
+    this.focusBrowserChar(value);
+  }
+
+  focusBrowserChar(char) {
+    const index = this._getAllSyllables().indexOf(char);
     if (index < 0) {
-      this.options.onInvalidLocateChar?.(value);
+      this.options.onInvalidLocateChar?.(char);
       return;
     }
 
-    this.browserSelectedChar = value;
+    this.browserSelectedChar = char;
     this.browserPage = Math.floor(index / this.browserPageSize);
+    if (this.browserInput) {
+      this.browserInput.value = char;
+    }
     this._renderBrowser();
   }
 
@@ -212,12 +219,26 @@ export class PreviewPanel {
 
     pageChars.forEach((char) => {
       const imported = this.syllableImports?.[char];
+      const commands = this._getComposedCommands(char);
       const button = document.createElement('button');
       button.type = 'button';
       button.className = `preview-browser-card ${char === this.browserSelectedChar ? 'active' : ''} ${imported ? 'has-import' : ''}`;
       button.title = char;
       let visualNode;
-      if (imported?.imageSrc) {
+      if (commands.length > 0) {
+        const canvas = document.createElement('canvas');
+        const size = 48;
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = size * dpr;
+        canvas.height = size * dpr;
+        canvas.style.width = `${size}px`;
+        canvas.style.height = `${size}px`;
+
+        const ctx = canvas.getContext('2d');
+        ctx.scale(dpr, dpr);
+        this._drawCommands(ctx, commands, 0, 0, size);
+        visualNode = canvas;
+      } else if (imported?.imageSrc) {
         const image = document.createElement('img');
         image.className = 'preview-browser-import-image';
         image.alt = `${char} imported source`;
@@ -235,11 +256,6 @@ export class PreviewPanel {
         const ctx = canvas.getContext('2d');
         ctx.scale(dpr, dpr);
 
-        const info = decompose(char);
-        if (info) {
-          const commands = composeSyllable(info.cho, info.jung, info.jong, this.jamoLib);
-          this._drawCommands(ctx, commands, 0, 0, size);
-        }
         visualNode = canvas;
       }
 
@@ -293,13 +309,18 @@ export class PreviewPanel {
       if (char === ' ') continue;
 
       const imported = this.syllableImports?.[char];
+      const commands = this._getComposedCommands(char);
+      if (commands.length > 0) {
+        this._drawCommands(ctx, commands, x, startY, cellSize);
+        continue;
+      }
+
       if (imported?.imageSrc) {
         this._drawImportedPreview(ctx, char, x, startY, cellSize);
         continue;
       }
 
-      const info = decompose(char);
-      if (!info) {
+      if (!decompose(char)) {
         ctx.save();
         ctx.font = `${cellSize * 0.7}px "Pretendard", sans-serif`;
         ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
@@ -310,16 +331,17 @@ export class PreviewPanel {
         continue;
       }
 
-      const commands = composeSyllable(info.cho, info.jung, info.jong, this.jamoLib);
-      if (commands.length === 0) {
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(x, startY, cellSize, cellSize);
-        continue;
-      }
-
-      this._drawCommands(ctx, commands, x, startY, cellSize);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x, startY, cellSize, cellSize);
     }
+  }
+
+  _getComposedCommands(char) {
+    const info = decompose(char);
+    return info
+      ? composeSyllable(info.cho, info.jung, info.jong, this.jamoLib)
+      : [];
   }
 
   _drawImportedPreview(ctx, char, x, y, size) {
@@ -394,4 +416,3 @@ export class PreviewPanel {
     this._renderBrowser();
   }
 }
-

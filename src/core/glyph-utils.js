@@ -1,0 +1,152 @@
+/**
+ * glyph-utils.js — shared glyph rendering utilities
+ *
+ * Consolidates glyph drawing code that was duplicated across
+ * main.js, preview-panel.js, and other modules.
+ */
+
+import { composeSyllable } from './composer.js';
+
+/**
+ * Decompose a Hangul syllable character into cho/jung/jong indices.
+ * @param {string} char — single Hangul character
+ * @returns {{ cho: number, jung: number, jong: number } | null}
+ */
+export function decomposeChar(char) {
+  const code = char.charCodeAt(0);
+  if (code < 0xAC00 || code > 0xD7A3) return null;
+  const offset = code - 0xAC00;
+  const cho = Math.floor(offset / (21 * 28));
+  const jung = Math.floor((offset % (21 * 28)) / 28);
+  const jong = offset % 28;
+  return { cho, jung, jong };
+}
+
+/**
+ * Compose a syllable from cho/jung/jong using the given jamoLib.
+ * @param {number} cho
+ * @param {number} jung
+ * @param {number} jong
+ * @param {Object} jamoLib
+ * @returns {Array} path commands
+ */
+export function composeSyllableFromLib(cho, jung, jong, jamoLib) {
+  return composeSyllable(cho, jung, jong, jamoLib);
+}
+
+/**
+ * Draw glyph path commands onto a canvas context.
+ * Uses the font coordinate system (Y-up) mapped to canvas (Y-down).
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {Array} commands — path commands with type M/L/Q/C/Z
+ * @param {number} x — top-left x
+ * @param {number} y — top-left y
+ * @param {number} size — cell size in pixels
+ */
+export function drawGlyphOnCtx(ctx, commands, x, y, size) {
+  if (!commands || commands.length === 0) return;
+  const scale = size / 1000;
+
+  ctx.save();
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+  ctx.beginPath();
+
+  for (const cmd of commands) {
+    switch (cmd.type) {
+      case 'M': ctx.moveTo(x + cmd.x * scale, y + (1000 - cmd.y) * scale); break;
+      case 'L': ctx.lineTo(x + cmd.x * scale, y + (1000 - cmd.y) * scale); break;
+      case 'Q': ctx.quadraticCurveTo(x + cmd.x1 * scale, y + (1000 - cmd.y1) * scale, x + cmd.x * scale, y + (1000 - cmd.y) * scale); break;
+      case 'C': ctx.bezierCurveTo(x + cmd.x1 * scale, y + (1000 - cmd.y1) * scale, x + cmd.x2 * scale, y + (1000 - cmd.y2) * scale, x + cmd.x * scale, y + (1000 - cmd.y) * scale); break;
+      case 'Z': ctx.closePath(); break;
+    }
+  }
+
+  ctx.fill();
+  ctx.restore();
+}
+
+/**
+ * Draw path commands with a custom fill style.
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {Array} commands
+ * @param {number} x
+ * @param {number} y
+ * @param {number} size
+ * @param {string} fillStyle
+ */
+export function drawPathCommands(ctx, commands, x, y, size, fillStyle = 'rgba(255, 255, 255, 0.92)') {
+  const scale = size / 1000;
+  ctx.save();
+  ctx.fillStyle = fillStyle;
+  ctx.beginPath();
+  commands.forEach((cmd) => {
+    switch (cmd.type) {
+      case 'M':
+        ctx.moveTo(x + cmd.x * scale, y + (1000 - cmd.y) * scale);
+        break;
+      case 'L':
+        ctx.lineTo(x + cmd.x * scale, y + (1000 - cmd.y) * scale);
+        break;
+      case 'Q':
+        ctx.quadraticCurveTo(
+          x + cmd.x1 * scale, y + (1000 - cmd.y1) * scale,
+          x + cmd.x * scale, y + (1000 - cmd.y) * scale
+        );
+        break;
+      case 'C':
+        ctx.bezierCurveTo(
+          x + cmd.x1 * scale, y + (1000 - cmd.y1) * scale,
+          x + cmd.x2 * scale, y + (1000 - cmd.y2) * scale,
+          x + cmd.x * scale, y + (1000 - cmd.y) * scale
+        );
+        break;
+      case 'Z':
+        ctx.closePath();
+        break;
+    }
+  });
+  ctx.fill();
+  ctx.restore();
+}
+
+/**
+ * Create a canvas element with a rendered glyph.
+ * @param {Array} commands — path commands
+ * @param {number} size — pixel size
+ * @returns {HTMLCanvasElement}
+ */
+export function createGlyphCanvas(commands, size) {
+  const canvas = document.createElement('canvas');
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = size * dpr;
+  canvas.height = size * dpr;
+  canvas.style.width = `${size}px`;
+  canvas.style.height = `${size}px`;
+
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  drawGlyphOnCtx(ctx, commands, 0, 0, size);
+  return canvas;
+}
+
+/**
+ * Create a canvas element for a part preview with a dark background.
+ * @param {Array} commands — path commands
+ * @param {number} size — pixel size
+ * @returns {HTMLCanvasElement}
+ */
+export function createPartPreviewCanvas(commands, size = 96) {
+  const canvas = document.createElement('canvas');
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = size * dpr;
+  canvas.height = size * dpr;
+  canvas.style.width = `${size}px`;
+  canvas.style.height = `${size}px`;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.24)';
+  ctx.fillRect(0, 0, size, size);
+  drawPathCommands(ctx, commands, 0, 0, size);
+  return canvas;
+}

@@ -140,6 +140,10 @@ function getCommandBounds(commands) {
 }
 
 function fitCommandsToSlot(commands, slot) {
+  if (commands.some((cmd) => cmd.preservePosition)) {
+    return commands.map(({ preservePosition, ...cmd }) => cmd);
+  }
+
   const bounds = getCommandBounds(commands);
   if (!bounds) return [];
 
@@ -167,120 +171,25 @@ function fitCommandsToSlot(commands, slot) {
 
 function getChoCommands(choIdx, jungIdx, jongIdx, jamoLib) {
   const choChar = CHO[choIdx];
-  const choInfo = getChoInfo(choIdx);
-  const dirSuffix = getVowelCategory(jungIdx) === 'vertical' ? 'v' : 'h';
-  const context = getCompositionContext(jongIdx);
-
-  if (choInfo.isDouble) {
-    return resolveCommands(jamoLib, [
-      `cho_${dirSuffix}_${context}_${choChar}`,
-      `cho_${dirSuffix}_${choChar}`,
-      `cho_${dirSuffix}_${context}_${choInfo.base}`,
-      `cho_${dirSuffix}_${choInfo.base}`,
-    ]);
-  }
-
-  return resolveCommands(jamoLib, [
-    `cho_${dirSuffix}_${context}_${choChar}`,
-    `cho_${dirSuffix}_${choChar}`,
-  ]);
+  const cat = getVowelCategory(jungIdx);
+  const dirSuffix = cat === 'vertical' ? 'v' : cat === 'horizontal' ? 'h' : 'm';
+  const wfSuffix = jongIdx > 0 ? '_wf' : '';
+  return resolveCommands(jamoLib, [`cho_${dirSuffix}${wfSuffix}_${choChar}`]);
 }
 
 function getJungCommands(jungIdx, jongIdx, jamoLib) {
   const vowel = JUNG[jungIdx];
-  const context = getCompositionContext(jongIdx);
-  const suffix = context === COMPOSITION_CONTEXT.CV ? 'nb' : 'wb';
-
-  const direct = resolveCommands(jamoLib, [
-    `jung_${suffix}_${context}_${vowel}`,
-    `jung_${suffix}_${vowel}`,
-  ]);
-  if (direct.length > 0) {
-    return direct;
-  }
-
-  const jungInfo = getJungInfo(jungIdx);
-  if (jungInfo.isCompound && jungInfo.components) {
-    return resolveCommands(jamoLib, [
-      `jung_${suffix}_${context}_${jungInfo.components[0]}`,
-      `jung_${suffix}_${jungInfo.components[0]}`,
-    ]);
-  }
-
-  return [];
-}
-
-function getJongCommands(jongIdx, jungIdx, jamoLib, slot = 'single') {
-  if (jongIdx === 0) return [];
-
-  const jongInfo = getJongInfo(jongIdx);
-  if (jongInfo?.isCompound) return [];
-  const vowelContext = getVowelCategory(jungIdx);
-
-  return resolveCommands(jamoLib, [
-    `jong_${slot}_${vowelContext}_${JONG[jongIdx]}`,
-    `jong_${slot}_${JONG[jongIdx]}`,
-    `jong_${JONG[jongIdx]}`,
-  ]);
+  const suffix = jongIdx === 0 ? 'nb' : 'wb';
+  return resolveCommands(jamoLib, [`jung_${suffix}_${vowel}`]);
 }
 
 function composeJongCommands(jongIdx, jungIdx, layout, jamoLib) {
   if (jongIdx === 0 || !layout?.jong) return [];
-
-  const jongInfo = getJongInfo(jongIdx);
-  const jongSlot = layout.jong;
-  const vowelContext = getVowelCategory(jungIdx);
-
-  if (!jongInfo?.isCompound || !jongInfo.components?.length) {
-    const jongCmds = getJongCommands(jongIdx, jungIdx, jamoLib, 'single');
-    if (jongCmds.length === 0) return [];
-
-    return fitCommandsToSlot(jongCmds, jongSlot);
-  }
-
-  const clusterCommands = resolveCommands(jamoLib, [
-    `jong_cluster_${vowelContext}_${jongInfo.base}`,
-    `jong_cluster_${jongInfo.base}`,
-    `jong_cluster_${COMPOSITION_CONTEXT.CVC_COMPOUND}_${jongInfo.base}`,
-  ]);
-  if (clusterCommands.length > 0) {
-    return fitCommandsToSlot(clusterCommands, jongSlot);
-  }
-
-  const [leftJamo, rightJamo] = jongInfo.components;
-  const leftCommands = resolveCommands(jamoLib, [
-    `jong_compound_left_${leftJamo}`,
-    `jong_left_${leftJamo}`,
-    `jong_${leftJamo}`,
-  ]);
-  const rightCommands = resolveCommands(jamoLib, [
-    `jong_compound_right_${rightJamo}`,
-    `jong_right_${rightJamo}`,
-    `jong_${rightJamo}`,
-  ]);
-  if (leftCommands.length === 0 || rightCommands.length === 0) return [];
-
-  const sidePadding = 0.03;
-  const gap = 0.04;
-  const innerWidth = jongSlot.w - sidePadding * 2;
-  const componentWidth = Math.max((innerWidth - gap) / 2, 0.01);
-  const leftSlot = {
-    x: jongSlot.x + sidePadding,
-    y: jongSlot.y,
-    w: componentWidth,
-    h: jongSlot.h,
-  };
-  const rightSlot = {
-    x: jongSlot.x + sidePadding + componentWidth + gap,
-    y: jongSlot.y,
-    w: componentWidth,
-    h: jongSlot.h,
-  };
-
-  return mergeCommands(
-    fitCommandsToSlot(leftCommands, leftSlot),
-    fitCommandsToSlot(rightCommands, rightSlot)
-  );
+  const cat = getVowelCategory(jungIdx);
+  const dirSuffix = cat === 'vertical' ? 'v' : cat === 'horizontal' ? 'h' : 'm';
+  const jongCmds = resolveCommands(jamoLib, [`jong_${dirSuffix}_${JONG[jongIdx]}`]);
+  if (jongCmds.length === 0) return [];
+  return fitCommandsToSlot(jongCmds, layout.jong);
 }
 
 export function composeSyllable(choIdx, jungIdx, jongIdx, jamoLib) {

@@ -26,6 +26,10 @@
   - invalid input messages
   - split target labels
   - index.html title/description/icon markup
+- Template import now persists through the shared app state saver instead of calling the removed `_persistJamoLib()` method.
+- Template review cards now route through the current split modal implementation.
+- Split modal now has explicit buttons for assigning selected groups to the active target, clearing selection, and clearing assignments, so right-click is no longer required.
+- `git diff --check` trailing-whitespace issue in `src/core/jamo-derive.js` was cleaned up.
 
 ## Important files
 
@@ -75,4 +79,5 @@
 
 ## Validation status
 
-- Last successful check: `npm run build`
+- Last successful checks: `npm run build`, `git diff --check`
+- Dev server: `http://127.0.0.1:5174/` (5173 was already in use)

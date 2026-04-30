@@ -136,11 +136,13 @@ export class Toolbar {
     const saveBtn = document.createElement('button');
     saveBtn.className = 'tool-btn save-btn';
     saveBtn.textContent = '💾';
+    saveBtn.title = 'Save the drawing as a reusable part';
     saveBtn.addEventListener('click', () => this.callbacks.onSave?.());
 
     const nextBtn = document.createElement('button');
     nextBtn.className = 'tool-btn next-btn';
     nextBtn.textContent = '💾➡️';
+    nextBtn.title = 'Save this part, then move to the next guide';
     nextBtn.addEventListener('click', () => this.callbacks.onNext?.());
 
     actionGroup.appendChild(saveBtn);

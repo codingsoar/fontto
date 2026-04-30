@@ -70,6 +70,13 @@ export class DrawingCanvas {
     this.canvas.addEventListener('pointerup', (e) => this._handlePointerUp(e));
     this.canvas.addEventListener('pointercancel', (e) => this._handlePointerUp(e));
     this.canvas.addEventListener('pointerrawupdate', (e) => this._handlePointerMove(e));
+
+    // Prevent Safari/mobile pull-to-refresh and scroll behaviors
+    const preventScroll = (e) => {
+      if (e.cancelable) e.preventDefault();
+    };
+    this.canvas.addEventListener('touchstart', preventScroll, { passive: false });
+    this.canvas.addEventListener('touchmove', preventScroll, { passive: false });
   }
 
   _getPos(e) {
@@ -78,6 +85,7 @@ export class DrawingCanvas {
       x: e.clientX - rect.left,
       y: e.clientY - rect.top,
       pressure: e.pressure > 0 ? e.pressure : 0.5,
+      pointerType: e.pointerType || 'mouse',
       time: typeof e.timeStamp === 'number' ? Math.round(e.timeStamp) : Date.now(),
     };
   }
@@ -253,8 +261,8 @@ export class DrawingCanvas {
     this._emitChange();
   }
 
-  exportStrokes() {
-    return this._cloneStrokes(this.strokes);
+  exportStrokes(options = {}) {
+    return this._cloneStrokes(this._getStrokesForOutput(options));
   }
 
   setPenSize(size) {
@@ -622,16 +630,22 @@ export class DrawingCanvas {
       for (let i = 1; i < processedStroke.length; i++) {
         const prev = processedStroke[i - 1];
         const curr = processedStroke[i];
-        const dx = curr.x - prev.x;
-        const dy = curr.y - prev.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        const dt = Math.max(curr.time - prev.time, 1);
-        const speed = dist / dt;
+        let width;
 
-        const width = Math.max(
-          this.penSize * 0.3,
-          this.penSize * (1.2 - speed * 0.15)
-        );
+        if (curr.pointerType === 'pen') {
+          width = this.penSize * (0.3 + curr.pressure * 1.5);
+        } else {
+          const dx = curr.x - prev.x;
+          const dy = curr.y - prev.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          const dt = Math.max(curr.time - prev.time, 1);
+          const speed = dist / dt;
+
+          width = Math.max(
+            this.penSize * 0.3,
+            this.penSize * (1.2 - speed * 0.15)
+          );
+        }
 
         ctx.beginPath();
         ctx.strokeStyle = isActive
@@ -685,13 +699,14 @@ export class DrawingCanvas {
     }
   }
 
-  toPathCommands() {
-    if (this.strokes.length === 0) return [];
+  toPathCommands(options = {}) {
+    const outputStrokes = this._getStrokesForOutput(options);
+    if (outputStrokes.length === 0) return [];
 
     const polygons = [];
     const halfPen = this.penSize / 2;
 
-    for (const stroke of this.strokes) {
+    for (const stroke of outputStrokes) {
       const processedStroke = this._getProcessedStroke(stroke);
       if (processedStroke.length < 2) continue;
       const polygon = this._buildStrokePolygon(processedStroke, halfPen);
@@ -702,14 +717,25 @@ export class DrawingCanvas {
 
     if (polygons.length === 0) return [];
 
-    const margin = 72;
-    const targetSize = 1000 - margin * 2;
     const bounds = this._getBounds(polygons.flat());
     const sourceWidth = Math.max(bounds.maxX - bounds.minX, 1);
     const sourceHeight = Math.max(bounds.maxY - bounds.minY, 1);
-    const scale = Math.min(targetSize / sourceWidth, targetSize / sourceHeight);
-    const offsetX = margin + (targetSize - sourceWidth * scale) / 2;
-    const offsetY = margin + (targetSize - sourceHeight * scale) / 2;
+    const target = options.targetRegion
+      ? {
+        x: options.targetRegion.x * 1000,
+        y: options.targetRegion.y * 1000,
+        w: options.targetRegion.w * 1000,
+        h: options.targetRegion.h * 1000,
+      }
+      : {
+        x: 72,
+        y: 72,
+        w: 856,
+        h: 856,
+      };
+    const scale = Math.min(target.w / sourceWidth, target.h / sourceHeight);
+    const offsetX = target.x + (target.w - sourceWidth * scale) / 2;
+    const offsetY = target.y + (target.h - sourceHeight * scale) / 2;
 
     const normalize = (point) => ({
       x: (point.x - bounds.minX) * scale + offsetX,
@@ -732,6 +758,18 @@ export class DrawingCanvas {
     }
 
     return commands;
+  }
+
+  getSelectedStrokeCount() {
+    return this.selectedStrokeIndices.size;
+  }
+
+  _getStrokesForOutput(options = {}) {
+    if (!options.selectedOnly || this.selectedStrokeIndices.size === 0) {
+      return this.strokes;
+    }
+
+    return this.strokes.filter((_, index) => this.selectedStrokeIndices.has(index));
   }
 
   _buildStrokePolygon(stroke, halfPen) {
@@ -764,6 +802,11 @@ export class DrawingCanvas {
 
     const prev = stroke[index - 1];
     const point = stroke[index];
+
+    if (point.pointerType === 'pen') {
+      return halfPen * (0.3 + point.pressure * 1.5);
+    }
+
     const dx = point.x - prev.x;
     const dy = point.y - prev.y;
     const dist = Math.sqrt(dx * dx + dy * dy);

@@ -6,6 +6,7 @@ import opentype from 'opentype.js';
 import { CHO, JUNG, JONG, compose, TOTAL_SYLLABLES } from './hangul.js';
 import { composeSyllable, commandsToPath } from './composer.js';
 import { deriveAll } from './jamo-derive.js';
+import { deriveAsciiGlyphs } from './ascii-derive.js';
 
 const UPM = 1000;
 const ASCENDER = 800;
@@ -188,6 +189,19 @@ export function generateFont(jamoLib, fontName = 'MyHandwritingFont', onProgress
         }
       }
     }
+  }
+
+  // 4b. ASCII glyphs (33-126)
+  const asciiLib = deriveAsciiGlyphs(jamoLib);
+  for (let code = 33; code <= 126; code++) {
+    if (code === 32) continue; // space already added
+    const key = `ascii_${code}`;
+    const commands = asciiLib[key] ?? [];
+    if (commands.length === 0) continue;
+    const char = String.fromCharCode(code);
+    const name = `ascii_${char.replace(/[^A-Za-z0-9]/g, `u${code}`).padStart(4, '0')}`;
+    const glyph = createGlyph(name, code, commands);
+    glyphs.push(glyph);
   }
 
   if (onProgress) onProgress(1);

@@ -1,4 +1,5 @@
 import { CATEGORIES, buildGuideMeta } from '../ui/jamo-grid.js';
+import { compose, decompose } from './hangul.js';
 
 export const TEMPLATE_COLUMNS = 6;
 const TEMPLATE_CELL_WIDTH = 168;
@@ -72,7 +73,7 @@ export function buildTemplateSvg(slots) {
         <rect x="${drawRect.x}" y="${drawRect.y}" width="${drawRect.w}" height="${drawRect.h}" rx="8" fill="#fafbff" stroke="#c6cbdb" stroke-dasharray="6 6" />
         <text x="${rect.x + 12}" y="${headerY}" font-family="Noto Sans KR, sans-serif" font-size="15" font-weight="700" fill="#22283a">${escapeXml(title)}</text>
         <text x="${rect.x + 12}" y="${headerY + 18}" font-family="Noto Sans KR, sans-serif" font-size="11" fill="#667089">${escapeXml(categoryText)} - ${escapeXml(slot.guideLabel)}</text>
-        <text x="${drawRect.x + drawRect.w / 2}" y="${guideCenterY}" text-anchor="middle" dominant-baseline="middle" font-family="Noto Sans KR, sans-serif" font-size="88" font-weight="700" fill="#e6eaf5">${escapeXml(slot.example)}</text>
+        <text x="${drawRect.x + drawRect.w / 2}" y="${guideCenterY}" text-anchor="middle" dy="0.35em" font-family="Noto Sans KR, sans-serif" font-size="88" font-weight="700" fill="#e6eaf5">${escapeXml(slot.example)}</text>
         <text x="${rect.x + 12}" y="${rect.y + rect.h - 12}" font-family="Noto Sans KR, sans-serif" font-size="11" fill="#5a6278">${escapeXml(affectsText)}</text>
       </g>
     `;
@@ -227,6 +228,13 @@ export function selectedComponentsToCommands(extracted, componentIds, targetRegi
   return maskToCommands(mask, extracted.width, extracted.height, mergeComponentBounds(selected), targetRegion);
 }
 
+export function selectedComponentsToPositionedCommands(extracted, componentIds) {
+  const selected = extracted.components.filter((component) => componentIds.includes(component.id));
+  if (selected.length === 0) return [];
+  const mask = buildMaskFromComponents(selected, extracted.width, extracted.height);
+  return maskToPositionedCommands(mask, extracted.width, extracted.height, mergeComponentBounds(selected));
+}
+
 export function selectedComponentsToStrokes(extracted, componentIds, targetRegion = null) {
   const selected = extracted.components.filter((component) => componentIds.includes(component.id));
   if (selected.length === 0) return [];
@@ -331,6 +339,34 @@ function maskToCommands(mask, width, height, bounds, targetRegion) {
     commands.push({ type: 'L', x: x + w, y: bottom });
     commands.push({ type: 'L', x, y: bottom });
     commands.push({ type: 'Z' });
+  });
+
+  return commands;
+}
+
+function maskToPositionedCommands(mask, width, height, bounds) {
+  if (!bounds) return [];
+
+  const rects = mergeRunsIntoRects(mask, width, height, bounds);
+  if (rects.length === 0) return [];
+
+  const scaleX = 1000 / width;
+  const scaleY = 1000 / height;
+  const commands = [];
+
+  rects.forEach((rect) => {
+    const x = rect.x * scaleX;
+    const y = rect.y * scaleY;
+    const w = rect.w * scaleX;
+    const h = rect.h * scaleY;
+    const top = 1000 - y;
+    const bottom = 1000 - (y + h);
+
+    commands.push({ type: 'M', x, y: top, preservePosition: true });
+    commands.push({ type: 'L', x: x + w, y: top, preservePosition: true });
+    commands.push({ type: 'L', x: x + w, y: bottom, preservePosition: true });
+    commands.push({ type: 'L', x, y: bottom, preservePosition: true });
+    commands.push({ type: 'Z', preservePosition: true });
   });
 
   return commands;
@@ -473,16 +509,20 @@ function mergeComponentBounds(components) {
   if (!components.length) return null;
 
   return components.reduce((bounds, component) => ({
-    minX: Math.min(bounds.minX, component.minX),
-    minY: Math.min(bounds.minY, component.minY),
-    maxX: Math.max(bounds.maxX, component.maxX),
-    maxY: Math.max(bounds.maxY, component.maxY),
+    minX: Math.min(bounds.minX, getComponentBound(component, 'minX')),
+    minY: Math.min(bounds.minY, getComponentBound(component, 'minY')),
+    maxX: Math.max(bounds.maxX, getComponentBound(component, 'maxX')),
+    maxY: Math.max(bounds.maxY, getComponentBound(component, 'maxY')),
   }), {
     minX: Number.POSITIVE_INFINITY,
     minY: Number.POSITIVE_INFINITY,
     maxX: Number.NEGATIVE_INFINITY,
     maxY: Number.NEGATIVE_INFINITY,
   });
+}
+
+function getComponentBound(component, key) {
+  return component[key] ?? component.bounds?.[key] ?? 0;
 }
 
 function mergeRunsIntoRects(mask, width, height, bounds) {
@@ -545,9 +585,28 @@ function escapeXml(value) {
 }
 
 function buildPreviewChars(category, index, example) {
+  const info = decompose(example);
+  if (!info) return [example];
+
   const previews = [example];
-  if (category.examples[index + 1]) previews.push(category.examples[index + 1]);
-  if (category.examples[index - 1] && previews.length < 2) previews.push(category.examples[index - 1]);
+  const add = (cho, jung, jong = 0) => {
+    previews.push(compose(cho, jung, jong));
+  };
+
+  if (category.id.startsWith('cho_v_wf')) {
+    add(info.cho, 0, 4);
+  } else if (category.id.startsWith('cho_h_wf')) {
+    add(info.cho, 8, 4);
+  } else if (category.id.startsWith('cho_v')) {
+    add(info.cho, 2, 0);
+  } else if (category.id.startsWith('cho_h')) {
+    add(info.cho, 8, 0);
+  } else if (category.id.startsWith('jung')) {
+    add(2, info.jung, info.jong);
+  } else if (category.id.startsWith('jong')) {
+    add(2, info.jung, info.jong);
+  }
+
   return [...new Set(previews)].slice(0, 2);
 }
 

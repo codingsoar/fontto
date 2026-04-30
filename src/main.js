@@ -1,7 +1,8 @@
-﻿/**
- * main.js ??Fontto ??吏꾩엯?? *
- * ?ㅽ뀦 湲곕컲 ?뚮줈??
- *   1. ?쒕뵫 ??2. ?먮え ?낅젰 ??3. 誘몃━蹂닿린 & ?ㅼ젙 ??4. ?앹꽦 & ?ㅼ슫濡쒕뱶
+/**
+ * main.js — Fontto entry point
+ *
+ * Application flow:
+ *   1. Landing → 2. Jamo input → 3. Preview & review → 4. Generate & download
  */
 
 import './index.css';
@@ -9,42 +10,22 @@ import { DrawingCanvas } from './ui/drawing-canvas.js';
 import { JamoGrid, CATEGORIES, REQUIRED_JAMO_COUNT, buildGuideMeta } from './ui/jamo-grid.js';
 import { PreviewPanel } from './ui/preview-panel.js';
 import { Toolbar } from './ui/toolbar.js';
-import { generateFont, downloadFont } from './core/font-generator.js';
 import { deriveAll } from './core/jamo-derive.js';
-import {
-  buildTemplateSvg,
-  getTemplateSlots,
-  getTemplateMetrics,
-  getTemplateCellRect,
-  getTemplateImportRect,
-  rasterRectToCommands,
-  extractRasterComponents,
-  rasterRectToCleanImageData,
-  selectedComponentsToCommands,
-  selectedComponentsToStrokes,
-} from './core/template-import.js';
-import {
-  CHO,
-  JUNG,
-  JONG,
-  compose,
-  getVowelCategory,
-  getChoInfo,
-  getJungInfo,
-  getJongInfo,
-} from './core/hangul.js';
+import { extractRasterComponents, selectedComponentsToCommands, selectedComponentsToPositionedCommands, selectedComponentsToStrokes } from './core/template-import.js';
+import { CHO, JUNG, JONG, compose, getVowelCategory, getChoInfo, getJungInfo, getJongInfo } from './core/hangul.js';
+import { loadState, saveState } from './core/storage.js';
+import { decomposeChar, composeSyllableFromLib, drawGlyphOnCtx, drawPathCommands, createGlyphCanvas, createPartPreviewCanvas } from './core/glyph-utils.js';
+import { showToast } from './ui/toast.js';
+import { showPreviewModal } from './ui/modals/preview-modal.js';
+import { showGenerateModal } from './ui/modals/generate-modal.js';
+import { showReviewModal, getDefaultReviewState } from './ui/modals/review-modal.js';
+import { showTemplateModal } from './ui/modals/template-modal.js';
+import { showSyllableSplitModal } from './ui/modals/syllable-split-modal.js';
+import { showQualityConfirmModal } from './ui/modals/quality-confirm-modal.js';
+import { showSyllableEditorModal } from './ui/modals/syllable-editor-modal.js';
 
-const STORAGE_KEY = 'fontto-jamo-lib-v1';
-const DRAFT_STORAGE_KEY = 'fontto-jamo-drafts-v1';
-const GUIDE_BOX_STORAGE_KEY = 'fontto-guide-boxes-v1';
-const SYLLABLE_IMPORT_STORAGE_KEY = 'fontto-syllable-imports-v1';
 const RECENT_REVIEW_LIMIT = 8;
-const COMMON_REVIEW_CHARS = [
-  '\uAC00', '\uB098', '\uB2E4', '\uB77C', '\uB9C8', '\uBC14', '\uC0AC', '\uC544',
-  '\uC790', '\uCC28', '\uCE74', '\uD0C0', '\uD30C', '\uD558', '\uD55C', '\uAE00',
-  '\uC11C', '\uC6B8', '\uD559', '\uAD50', '\uC0DD', '\uD65C', '\uC0AC', '\uB791',
-  '\uD589', '\uBCF5', '\uD76C', '\uB9DD', '\uB098', '\uBB34', '\uBC14', '\uB2E4',
-];
+
 class FonttoApp {
   jamoDrafts = {};
   guideOverrides = {};
@@ -52,12 +33,12 @@ class FonttoApp {
 
   constructor() {
     this.jamoLib = {};
+    this.pendingParts = {};
     this.currentStep = 'landing'; // 'landing' | 'editor' | 'preview' | 'generate'
-    this.reviewState = this._getDefaultReviewState();
+    this.reviewState = getDefaultReviewState();
     this.reviewReturnContext = null;
     this.recentEditedKeys = [];
     this.currentSelectionKey = null;
-
     this.drawingCanvas = null;
     this.jamoGrid = null;
     this.previewPanel = null;
@@ -67,7 +48,11 @@ class FonttoApp {
   }
 
   _init() {
-    this._loadSavedJamoLib();
+    const saved = loadState();
+    this.jamoLib = saved.jamoLib;
+    this.jamoDrafts = saved.jamoDrafts;
+    this.guideOverrides = saved.guideOverrides;
+    this.syllableImports = saved.syllableImports;
     this._showLanding();
     window.addEventListener('resize', () => this._handleResize());
   }
@@ -141,11 +126,17 @@ class FonttoApp {
         <aside class="editor-sidebar" id="jamoGridContainer"></aside>
 
         <main class="editor-canvas-area">
-          <div class="canvas-wrapper">
-            <canvas id="drawingCanvas"></canvas>
-          </div>
-          <div class="toolbar-area" id="toolbarContainer"></div>
-          <div class="quality-panel" id="qualityPanel"></div>
+          <section class="pending-parts-panel" id="pendingPartsPanel"></section>
+          <details class="manual-drawing-details">
+            <summary class="template-legacy-summary">Advanced manual drawing</summary>
+            <div class="manual-drawing-body">
+              <div class="canvas-wrapper">
+                <canvas id="drawingCanvas"></canvas>
+              </div>
+              <div class="toolbar-area" id="toolbarContainer"></div>
+              <div class="quality-panel" id="qualityPanel"></div>
+            </div>
+          </details>
         </main>
 
         <aside class="editor-browser-area" id="browserContainer"></aside>
@@ -171,7 +162,7 @@ class FonttoApp {
       this._onJamoSelect(catId, jamo, example, guide);
     }, {
       onLocateChar: (char) => this._jumpToGlyphEdit(char),
-      onInvalidLocateChar: () => this._showToast('가, 한 같은 한글 음절 한 글자를 입력하세요.', 'warning', 2600),
+      onInvalidLocateChar: () => showToast('가, 한 같은 한글 음절 한 글자를 입력하세요.', 'warning', 2600),
     });
     this.jamoGrid.setCompletedMap(this._getCompletedMapFromLib());
 
@@ -180,9 +171,9 @@ class FonttoApp {
     this.previewPanel = new PreviewPanel(previewContainer, {
       showBrowser: false,
       onLocateChar: (char) => this._jumpToGlyphEdit(char),
-      onEditImportedChar: (char) => this._showSyllableSplitModal(char),
+      onEditImportedChar: (char) => showSyllableSplitModal(this, char),
       onOpenGlyph: (char, meta) => this._handleGlyphCardOpen(char, meta),
-      onInvalidLocateChar: () => this._showToast('That glyph is outside the Hangul syllable set.', 'warning', 2600),
+      onInvalidLocateChar: () => showToast('That glyph is outside the Hangul syllable set.', 'warning', 2600),
     });
     this.previewPanel.updateJamoLib(deriveAll(this.jamoLib));
     this.previewPanel.updateSyllableImports(this.syllableImports);
@@ -193,9 +184,9 @@ class FonttoApp {
       showPreviewCanvas: false,
       showBrowser: true,
       onLocateChar: (char) => this._jumpToGlyphEdit(char),
-      onEditImportedChar: (char) => this._showSyllableSplitModal(char),
+      onEditImportedChar: (char) => showSyllableSplitModal(this, char),
       onOpenGlyph: (char, meta) => this._handleGlyphCardOpen(char, meta),
-      onInvalidLocateChar: () => this._showToast('That glyph is outside the Hangul syllable set.', 'warning', 2600),
+      onInvalidLocateChar: () => showToast('That glyph is outside the Hangul syllable set.', 'warning', 2600),
     });
     this.browserPanel.updateJamoLib(deriveAll(this.jamoLib));
     this.browserPanel.updateSyllableImports(this.syllableImports);
@@ -227,32 +218,95 @@ class FonttoApp {
       onBringSelectedToFront: () => this.drawingCanvas.bringSelectedToFront(),
       onSendSelectedToBack: () => this.drawingCanvas.sendSelectedToBack(),
       onResetGuideBox: () => this._resetGuideRegionForCurrentSelection(),
-      onSave: () => this._saveCurrentJamo(),
-      onNext: () => this._saveAndNext(),
+      onSave: () => this._saveCurrentPart(),
+      onNext: () => this._savePartAndNext(),
     });
 
     // Button events
     document.getElementById('previewBtn').addEventListener('click', () => {
-      this._showPreviewModal();
+      showPreviewModal(this);
     });
     document.getElementById('templateBtn').addEventListener('click', () => {
-      this._showTemplateModal();
+      showTemplateModal(this);
     });
     document.getElementById('reviewBtn').addEventListener('click', () => {
-      this._showReviewModal();
+      showReviewModal(this);
     });
     document.getElementById('returnToReviewBtn').addEventListener('click', () => {
       this._returnToReview();
     });
     document.getElementById('generateBtn').addEventListener('click', () => {
-      this._showGenerateModal();
+      showGenerateModal(this);
     });
 
     // 泥?踰덉㎏ ?먮え ?먮룞 ?좏깮
     this._checkGenerateReady();
     this._updateReturnToReviewButton();
+    this._renderPendingPartsPanel();
     this.jamoGrid.goToNext();
   }
+
+  _renderPendingPartsPanel() {
+    const panel = document.getElementById('pendingPartsPanel');
+    if (!panel) return;
+
+    const entries = Object.entries(this.pendingParts);
+    panel.innerHTML = `
+      <div class="pending-parts-header">
+        <div>
+          <h2>Saved Parts</h2>
+          <p>Extract strokes from imported syllables or draw a part manually, review it here, then apply it to the glyph browser.</p>
+        </div>
+        <div class="pending-parts-actions">
+          <button class="gen-btn" id="applyPendingPartsBtn" ${entries.length ? '' : 'disabled'}>Apply Saved Parts</button>
+          <button class="tool-btn" id="clearPendingPartsBtn" ${entries.length ? '' : 'disabled'}>Clear</button>
+        </div>
+      </div>
+      <div class="pending-parts-grid" id="pendingPartsGrid"></div>
+    `;
+
+    document.getElementById('applyPendingPartsBtn')?.addEventListener('click', () => {
+      this._applyPendingParts();
+    });
+    document.getElementById('clearPendingPartsBtn')?.addEventListener('click', () => {
+      this._clearAllPendingParts();
+    });
+
+    const grid = document.getElementById('pendingPartsGrid');
+    if (!grid) return;
+    if (!entries.length) {
+      grid.innerHTML = '<div class="pending-parts-empty">No saved parts yet. Open an imported syllable or draw in Advanced manual drawing, then save parts here.</div>';
+      return;
+    }
+
+    entries.forEach(([key, part]) => {
+      const card = document.createElement('div');
+      card.className = 'pending-part-card';
+
+      const canvas = createPartPreviewCanvas(part.commands, 96);
+      const title = document.createElement('div');
+      title.className = 'pending-part-title';
+      title.textContent = part.selection.guide?.label || `${part.selection.categoryId}_${part.selection.jamo}`;
+
+      const meta = document.createElement('div');
+      meta.className = 'pending-part-meta';
+      meta.textContent = `${key}${part.sourceChar ? ` from ${part.sourceChar}` : ''}`;
+
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'tool-btn pending-part-remove';
+      remove.textContent = 'Remove';
+      remove.addEventListener('click', () => this._clearPendingPart(key));
+
+      card.appendChild(canvas);
+      card.appendChild(title);
+      card.appendChild(meta);
+      card.appendChild(remove);
+      grid.appendChild(card);
+    });
+  }
+
+
 
   _onJamoSelect(catId, jamo, example, guide) {
     const label = document.getElementById('currentJamoLabel');
@@ -278,9 +332,9 @@ class FonttoApp {
   }
 
   _jumpToGlyphEdit(char) {
-    const info = this._decomposeChar(char);
+    const info = decomposeChar(char);
     if (!info) {
-      this._showToast('가, 한 같은 한글 음절 한 글자를 입력하세요.', 'warning', 2600);
+      showToast('가, 한 같은 한글 음절 한 글자를 입력하세요.', 'warning', 2600);
       return;
     }
 
@@ -301,19 +355,29 @@ class FonttoApp {
     this.reviewState = { ...this.reviewReturnContext.state };
     this._updateReturnToReviewButton();
     this.jamoGrid.selectItem(primaryTarget.categoryId, primaryTarget.jamo);
-    this._showToast(`Jumped to ${char} -> ${primaryTarget.label}`, 'success', 2200);
+    showToast(`Jumped to ${char} -> ${primaryTarget.label}`, 'success', 2200);
   }
 
   _handleGlyphCardOpen(char, meta = {}) {
     if (meta.imported || this.syllableImports?.[char]?.imageSrc) {
-      this._showSyllableSplitModal(char);
+      showSyllableSplitModal(this, char);
       return;
     }
     this._jumpToGlyphEdit(char);
   }
 
-  _saveCurrentJamo(options = {}) {
-    const sel = this.jamoGrid.getCurrentSelection();
+  _getCurrentDrawingSelection() {
+    const sel = this.jamoGrid?.getCurrentSelection();
+    if (!sel) return null;
+    const key = `${sel.categoryId}_${sel.jamo}`;
+    return {
+      ...sel,
+      guide: this._applyGuideOverride(sel.categoryId, key, sel.guide),
+    };
+  }
+
+  _saveCurrentPart(options = {}) {
+    const sel = this._getCurrentDrawingSelection();
     if (!sel) return false;
 
     if (!this.drawingCanvas.hasContent()) return false;
@@ -322,37 +386,29 @@ class FonttoApp {
 
     if (!options.force && qualityReport.hasBlockingWarnings) {
       this._showQualityConfirmModal(qualityReport, () => {
-        this._saveCurrentJamo({ ...options, force: true });
+        this._saveCurrentPart({ ...options, force: true });
       });
       return false;
     }
 
-    const commands = this.drawingCanvas.toPathCommands();
-    const key = `${sel.categoryId}_${sel.jamo}`;
-    const storageKeys = this._getStorageKeysForSelection(sel);
-    storageKeys.forEach((storageKey) => {
-      this.jamoLib[storageKey] = commands;
+    const selectedOnly = this.drawingCanvas.getSelectedStrokeCount() > 0;
+    const commands = this.drawingCanvas.toPathCommands({
+      targetRegion: sel.guide?.targetRegion,
+      selectedOnly,
     });
-    this.jamoDrafts[key] = {
-      strokes: this.drawingCanvas.exportStrokes(),
-    };
-    this._trackRecentJamoEdit(key);
+    const strokes = this.drawingCanvas.exportStrokes({ selectedOnly });
+    if (!commands.length) {
+      showToast('The drawing could not be converted into a reusable part.', 'warning', 2600);
+      return false;
+    }
 
-    this.jamoGrid.markCompleted(sel.categoryId, sel.jamo);
-
-    const fullLib = deriveAll(this.jamoLib);
-    this.previewPanel.updateJamoLib(fullLib);
-    if (this.browserPanel) this.browserPanel.updateJamoLib(fullLib);
-    this.previewPanel.updateSyllableImports(this.syllableImports);
-    if (this.browserPanel) this.browserPanel.updateSyllableImports(this.syllableImports);
-    this._persistJamoLib();
-
-    this._checkGenerateReady();
+    this._storePendingSelection(sel, commands, strokes, 'manual');
+    this._renderPendingPartsPanel();
 
     if (qualityReport.warnings.length > 0) {
       this._showQualityToast(qualityReport.warnings);
     } else if (!options.advance) {
-      this._showToast('Saved.', 'success', 2200);
+      showToast('Saved part to the pending panel.', 'success', 2200);
     }
 
     if (options.advance) {
@@ -366,8 +422,8 @@ class FonttoApp {
     return true;
   }
 
-  _saveAndNext() {
-    this._saveCurrentJamo({ advance: true });
+  _savePartAndNext() {
+    this._saveCurrentPart({ advance: true });
   }
 
   _checkGenerateReady() {
@@ -390,12 +446,12 @@ class FonttoApp {
   }
 
   _showCompleteToast() {
-    this._showToast('All required jamo are saved. You can generate the font now.', 'success');
+    showToast('All required jamo are saved. You can generate the font now.', 'success');
   }
   _showIncompleteToast() {
     const completedCount = this._getCompletedCount();
     const remaining = Math.max(REQUIRED_JAMO_COUNT - completedCount, 0);
-    this._showToast(`You still have ${remaining} required jamo to complete before review or export.`);
+    showToast(`You still have ${remaining} required jamo to complete before review or export.`);
   }
   _showReviewModal() {
     if (!this.jamoGrid?.isAllCompleted()) {
@@ -405,7 +461,7 @@ class FonttoApp {
 
     const fullLib = deriveAll(this.jamoLib);
     const state = {
-      ...this._getDefaultReviewState(),
+      ...getDefaultReviewState(),
       ...this.reviewState,
     };
 
@@ -553,7 +609,7 @@ class FonttoApp {
     gridEl.innerHTML = '';
 
     pageChars.forEach((char) => {
-      const info = this._decomposeChar(char);
+      const info = decomposeChar(char);
       const commands = info
         ? composeSyllableFromLib(info.cho, info.jung, info.jong, jamoLib)
         : [];
@@ -566,7 +622,7 @@ class FonttoApp {
         this._renderReviewPage(gridEl, inspectorEl, pageLabelEl, state, jamoLib);
       });
 
-      const canvas = this._createGlyphCanvas(commands, 56);
+      const canvas = createGlyphCanvas(commands, 56);
 
       button.appendChild(canvas);
       gridEl.appendChild(button);
@@ -575,7 +631,7 @@ class FonttoApp {
     this._renderReviewInspector(inspectorEl, state.selectedChar, jamoLib);
   }
   _renderReviewInspector(container, char, jamoLib) {
-    const info = this._decomposeChar(char);
+    const info = decomposeChar(char);
     if (!info) {
       this._renderReviewEmptyState(container);
       return;
@@ -590,7 +646,7 @@ class FonttoApp {
     title.className = 'review-inspector-title';
     title.textContent = `Glyph ${char}`;
 
-    const canvas = this._createGlyphCanvas(commands, 180);
+    const canvas = createGlyphCanvas(commands, 180);
     canvas.classList.add('review-inspector-canvas');
 
     const subtitle = document.createElement('p');
@@ -642,7 +698,7 @@ class FonttoApp {
 
     const ctx = canvas.getContext('2d');
     ctx.scale(dpr, dpr);
-    this._drawGlyphOnCtx(ctx, commands, 0, 0, size);
+    drawGlyphOnCtx(ctx, commands, 0, 0, size);
     return canvas;
   }
 
@@ -664,7 +720,7 @@ class FonttoApp {
   _getAllSyllableDetails() {
     if (!this._allSyllableDetails) {
       this._allSyllableDetails = this._getAllSyllables().map((char) => {
-        const info = this._decomposeChar(char);
+        const info = decomposeChar(char);
         const targets = this._getEditTargetsForSyllable(info.cho, info.jung, info.jong);
 
         return {
@@ -753,15 +809,7 @@ class FonttoApp {
     return queryIndex === queryChars.length;
   }
 
-  _getDefaultReviewState() {
-    return {
-      mode: 'all',
-      page: 0,
-      pageSize: 96,
-      selectedChar: '가',
-      comboQuery: '',
-    };
-  }
+
 
   _syncReviewControls(state, presetButtons, comboInput) {
     presetButtons.forEach((button) => {
@@ -791,32 +839,36 @@ class FonttoApp {
 
   _returnToReview() {
     if (!this.reviewReturnContext) {
-      this._showReviewModal();
+      showReviewModal(this);
       return;
     }
 
     this.reviewState = {
-      ...this._getDefaultReviewState(),
+      ...getDefaultReviewState(),
       ...this.reviewReturnContext.state,
       selectedChar: this.reviewReturnContext.selectedChar,
     };
 
-    this._showReviewModal();
+    showReviewModal(this);
   }
 
   _getEditTargetsForSyllable(choIdx, jungIdx, jongIdx) {
     const targets = [];
     const vowelCategory = getVowelCategory(jungIdx);
+    const hasFinal = jongIdx > 0;
     const choInfo = getChoInfo(choIdx);
     const jungInfo = getJungInfo(jungIdx);
     const jongInfo = getJongInfo(jongIdx);
+    const choContext = `${vowelCategory === 'vertical' ? '세로모음' : '가로/복합모음'} · ${hasFinal ? '받침 있음' : '받침 없음'}`;
+    const jungContext = hasFinal ? '받침 있음' : '받침 없음';
+    const jongContext = vowelCategory === 'horizontal' ? '가로모음 뒤' : '세로/복합모음 뒤';
 
     targets.push({
       categoryId: jongIdx > 0
         ? (vowelCategory === 'vertical' ? 'cho_v_wf' : 'cho_h_wf')
         : (vowelCategory === 'vertical' ? 'cho_v' : 'cho_h'),
       jamo: choInfo.base,
-      label: `초성 ${choInfo.base} 적용`,
+      label: `초성 ${choInfo.base} 적용 (${choContext})`,
     });
 
     const jungItems = jungInfo.isCompound && jungInfo.components
@@ -827,7 +879,7 @@ class FonttoApp {
       targets.push({
         categoryId: jongIdx > 0 ? 'jung_wb' : 'jung_nb',
         jamo,
-        label: `중성 ${jamo} 적용${jungItems.length > 1 ? ` ${index + 1}` : ''}`,
+        label: `중성 ${jamo} 적용 (${jungContext})${jungItems.length > 1 ? ` ${index + 1}` : ''}`,
       });
     });
 
@@ -836,7 +888,7 @@ class FonttoApp {
         targets.push({
           categoryId: vowelCategory === 'horizontal' ? 'jong_cluster_h' : 'jong_cluster',
           jamo: jongInfo.base,
-          label: `겹받침 ${jongInfo.base} 적용`,
+          label: `겹받침 ${jongInfo.base} 적용 (${jongContext})`,
         });
 
         return targets.filter((target, index, array) => {
@@ -852,7 +904,7 @@ class FonttoApp {
         targets.push({
           categoryId: vowelCategory === 'horizontal' ? 'jong_h' : 'jong',
           jamo,
-          label: `종성 ${jamo} 적용${jongItems.length > 1 ? ` ${index + 1}` : ''}`,
+          label: `종성 ${jamo} 적용 (${jongContext})${jongItems.length > 1 ? ` ${index + 1}` : ''}`,
         });
       });
     }
@@ -883,26 +935,29 @@ class FonttoApp {
           <div class="template-import-review" id="templateImportReview">
             <div class="template-target-empty">Upload a filled template to review extracted source syllables here.</div>
           </div>
-          <div class="template-manual">
-            <div class="template-manual-header">
-              <h3>Advanced: Split One Syllable</h3>
-              <p>Use this only when you want to decompose one completed syllable manually by selecting stroke groups.</p>
-            </div>
-            <div class="template-manual-controls">
-              <input type="text" class="gen-input template-syllable-input" id="templateSyllableInput" maxlength="1" placeholder="한" />
-              <label class="gen-btn template-upload-btn" for="templateSingleFileInput">Upload Syllable Image</label>
-              <input type="file" id="templateSingleFileInput" accept="image/*" class="template-file-input" />
-              <button class="gen-btn" id="templateApplySelectionBtn" disabled>Apply Selected Parts</button>
-            </div>
-            <div class="template-status" id="templateManualStatus">Choose one Hangul syllable and an image containing only that syllable.</div>
-            <div class="template-manual-layout">
-              <canvas class="template-manual-canvas" id="templateManualCanvas" width="520" height="520"></canvas>
-              <div class="template-manual-sidebar">
-                <div class="template-target-list" id="templateTargetList"></div>
-                <div class="template-selection-summary" id="templateSelectionSummary">No image loaded.</div>
+          <details class="template-manual-details">
+            <summary class="template-legacy-summary">Advanced single-syllable split</summary>
+            <div class="template-manual">
+              <div class="template-manual-header">
+                <h3>Split One Syllable</h3>
+                <p>Use this only when you want to decompose one completed syllable manually by selecting stroke groups.</p>
+              </div>
+              <div class="template-manual-controls">
+                <input type="text" class="gen-input template-syllable-input" id="templateSyllableInput" maxlength="1" placeholder="한" />
+                <label class="gen-btn template-upload-btn" for="templateSingleFileInput">Upload Syllable Image</label>
+                <input type="file" id="templateSingleFileInput" accept="image/*" class="template-file-input" />
+              <button class="gen-btn" id="templateApplySelectionBtn" disabled>Save Selected Parts</button>
+              </div>
+              <div class="template-status" id="templateManualStatus">Choose one Hangul syllable and an image containing only that syllable.</div>
+              <div class="template-manual-layout">
+                <canvas class="template-manual-canvas" id="templateManualCanvas" width="520" height="520"></canvas>
+                <div class="template-manual-sidebar">
+                  <div class="template-target-list" id="templateTargetList"></div>
+                  <div class="template-selection-summary" id="templateSelectionSummary">No image loaded.</div>
+                </div>
               </div>
             </div>
-          </div>
+          </details>
           <details class="template-legacy">
             <summary class="template-legacy-summary">Template preview</summary>
             <div class="template-legacy-body">
@@ -968,7 +1023,7 @@ class FonttoApp {
 
     const renderManual = () => {
       this._renderManualSplitState(manualCanvas, targetList, selectionSummary, manualState, renderManual);
-      applyBtn.disabled = !manualState.extracted || manualState.targets.every((_, index) => ![...manualState.assignments.values()].includes(index));
+      applyBtn.disabled = !this._canApplyManualSplit(manualState);
     };
 
     syllableInput.addEventListener('input', () => {
@@ -1023,14 +1078,18 @@ class FonttoApp {
 
     applyBtn.addEventListener('click', () => {
       const result = this._applyManualSplitAssignments(manualState);
-      manualStatus.textContent = `Applied ${result.applied} target${result.applied === 1 ? '' : 's'}.`;
+      manualStatus.textContent = result.applied > 0
+        ? `Saved ${result.applied} part${result.applied === 1 ? '' : 's'} to the pending panel.`
+        : `Saved 0 parts: ${result.reason || 'select a stroke group and target first.'}`;
       renderManual();
     });
 
     renderManual();
   }
 
-  async _showSyllableSplitModal(initialChar = '') {
+  async _showSyllableSplitModal(initialChar = '', options = {}) {
+    return showSyllableSplitModal(this, initialChar, options);
+
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
     overlay.innerHTML = `
@@ -1049,7 +1108,14 @@ class FonttoApp {
               <input type="text" class="gen-input template-syllable-input" id="splitSyllableInput" maxlength="1" placeholder="한" value="${initialChar}" />
               <label class="gen-btn template-upload-btn" for="splitSingleFileInput">Replace Image</label>
               <input type="file" id="splitSingleFileInput" accept="image/*" class="template-file-input" />
-              <button class="gen-btn" id="splitApplySelectionBtn" disabled>Apply Selected Parts</button>
+              <div class="template-edit-tools">
+                <button type="button" class="tool-btn active" id="splitSelectModeBtn">Select</button>
+                <button type="button" class="tool-btn" id="splitEraseModeBtn">Erase</button>
+                <button type="button" class="tool-btn" id="splitDrawModeBtn">Draw</button>
+                <button type="button" class="tool-btn" id="splitAutoAssignBtn">Auto Assign</button>
+                <label class="template-brush-control">Brush <input type="range" id="splitBrushSizeInput" min="6" max="42" value="18" /></label>
+              </div>
+              <button class="gen-btn" id="splitApplySelectionBtn" disabled>Save Selected Parts</button>
             </div>
             <div class="template-status" id="splitManualStatus">Load or replace the syllable image, then assign its parts.</div>
             <div class="template-manual-layout">
@@ -1074,14 +1140,18 @@ class FonttoApp {
 
     const state = {
       char: initialChar,
-      targets: this._getTargetsForManualSplit(initialChar),
+      targets: options.targets?.length ? options.targets : this._getTargetsForManualSplit(initialChar),
       extracted: null,
       image: null,
-      imageSrc: this.syllableImports?.[initialChar]?.imageSrc ?? null,
+      imageSrc: options.imageSrc ?? this.syllableImports?.[initialChar]?.imageSrc ?? null,
       activeTargetIndex: 0,
       assignments: new Map(),
       selectedComponentIds: new Set(),
       contextMenuEl: null,
+      editMode: 'select',
+      brushSize: 18,
+      editImageData: null,
+      isEditingMask: false,
     };
 
     const syllableInput = document.getElementById('splitSyllableInput');
@@ -1090,10 +1160,15 @@ class FonttoApp {
     const manualCanvas = document.getElementById('splitManualCanvas');
     const targetList = document.getElementById('splitTargetList');
     const selectionSummary = document.getElementById('splitSelectionSummary');
+    const selectModeBtn = document.getElementById('splitSelectModeBtn');
+    const eraseModeBtn = document.getElementById('splitEraseModeBtn');
+    const drawModeBtn = document.getElementById('splitDrawModeBtn');
+    const autoAssignBtn = document.getElementById('splitAutoAssignBtn');
+    const brushSizeInput = document.getElementById('splitBrushSizeInput');
 
     const render = () => {
       this._renderManualSplitState(manualCanvas, targetList, selectionSummary, state, render);
-      applyBtn.disabled = !state.extracted || state.targets.every((_, index) => ![...state.assignments.values()].includes(index));
+      applyBtn.disabled = !this._canApplyManualSplit(state);
     };
 
     const loadImageIntoState = async (src) => {
@@ -1101,6 +1176,7 @@ class FonttoApp {
       state.image = image;
       state.imageSrc = src;
       state.extracted = this._extractManualSplitImage(image);
+      state.editImageData = this._imageDataFromExtractedMask(state.extracted);
       state.assignments = new Map();
       state.selectedComponentIds = new Set();
       manualStatus.textContent = `Detected ${state.extracted.components.length} stroke groups. Select groups, then right-click to assign them.`;
@@ -1128,6 +1204,7 @@ class FonttoApp {
     });
 
     manualCanvas.addEventListener('click', (event) => {
+      if (state.editMode !== 'select') return;
       if (!state.extracted) return;
       const componentId = this._getManualComponentAtPoint(event, manualCanvas, state.extracted);
       if (componentId === null) return;
@@ -1136,7 +1213,52 @@ class FonttoApp {
     });
 
     manualCanvas.addEventListener('contextmenu', (event) => {
+      if (state.editMode !== 'select') {
+        event.preventDefault();
+        return;
+      }
       this._handleManualCanvasContextMenu(event, manualCanvas, state, render);
+    });
+
+    manualCanvas.addEventListener('pointerdown', (event) => {
+      if (state.editMode === 'select') return;
+      event.preventDefault();
+      state.isEditingMask = true;
+      this._paintManualMaskAtEvent(event, manualCanvas, state);
+      this._reextractManualMask(state);
+      render();
+    });
+    manualCanvas.addEventListener('pointermove', (event) => {
+      if (!state.isEditingMask || state.editMode === 'select') return;
+      event.preventDefault();
+      this._paintManualMaskAtEvent(event, manualCanvas, state);
+      this._reextractManualMask(state);
+      render();
+    });
+    window.addEventListener('pointerup', () => {
+      state.isEditingMask = false;
+    });
+
+    const setEditMode = (mode) => {
+      state.editMode = mode;
+      state.selectedComponentIds = new Set();
+      [selectModeBtn, eraseModeBtn, drawModeBtn].forEach((button) => button?.classList.remove('active'));
+      if (mode === 'select') selectModeBtn?.classList.add('active');
+      if (mode === 'erase') eraseModeBtn?.classList.add('active');
+      if (mode === 'draw') drawModeBtn?.classList.add('active');
+      render();
+    };
+    selectModeBtn?.addEventListener('click', () => setEditMode('select'));
+    eraseModeBtn?.addEventListener('click', () => setEditMode('erase'));
+    drawModeBtn?.addEventListener('click', () => setEditMode('draw'));
+    autoAssignBtn?.addEventListener('click', () => {
+      const result = this._autoAssignManualSplitTargets(state);
+      manualStatus.textContent = `Auto assigned ${result.assigned} group${result.assigned === 1 ? '' : 's'}. ${result.needsReview} group${result.needsReview === 1 ? '' : 's'} need review.`;
+      setEditMode('select');
+      render();
+    });
+    brushSizeInput?.addEventListener('input', () => {
+      state.brushSize = Number(brushSizeInput.value) || 18;
     });
 
     document.getElementById('splitSingleFileInput').addEventListener('change', async (event) => {
@@ -1152,7 +1274,9 @@ class FonttoApp {
 
     applyBtn.addEventListener('click', () => {
       const result = this._applyManualSplitAssignments(state);
-      manualStatus.textContent = `Applied ${result.applied} target${result.applied === 1 ? '' : 's'}.`;
+      manualStatus.textContent = result.applied > 0
+        ? `Saved ${result.applied} part${result.applied === 1 ? '' : 's'} to the pending panel.`
+        : `Saved 0 parts: ${result.reason || 'select a stroke group and target first.'}`;
       render();
     });
 
@@ -1218,7 +1342,12 @@ class FonttoApp {
 
       const cleanImageData = rasterRectToCleanImageData(imageData);
       const imageSrc = this._createImageDataUrl(cleanImageData);
-      this.syllableImports[slot.example] = { imageSrc };
+      if (!this.syllableImports[slot.example]) {
+        this.syllableImports[slot.example] = {
+          imageSrc,
+          sourceChar: slot.example,
+        };
+      }
 
       if (!importedByChar.has(slot.example)) {
         importedByChar.set(slot.example, {
@@ -1236,8 +1365,8 @@ class FonttoApp {
     importedSlots.push(...importedByChar.values());
     this.previewPanel.updateSyllableImports(this.syllableImports);
     if (this.browserPanel) this.browserPanel.updateSyllableImports(this.syllableImports);
-    this._persistJamoLib();
-    this._showToast(`Template import complete: ${imported} source syllables`, imported > 0 ? 'success' : 'warning', 3200);
+    this._persistState();
+    showToast(`Template import complete: ${imported} source syllables`, imported > 0 ? 'success' : 'warning', 3200);
 
     return { imported, skipped, importedSlots };
   }
@@ -1274,15 +1403,18 @@ class FonttoApp {
 
       const subtitle = document.createElement('span');
       subtitle.className = 'template-import-card-subtitle';
-      subtitle.textContent = `${slot.sourceJamo} -> ${slot.targets.map((target) => target.label).join(' / ')}`;
+      subtitle.textContent = slot.targets.map((target) => target.label).join(' / ');
 
       card.appendChild(image);
       card.appendChild(title);
       card.appendChild(subtitle);
       card.addEventListener('click', () => {
-        this._showSyllableSplitModal(slot.char);
+        showSyllableSplitModal(this, slot.char, {
+          imageSrc: slot.imageSrc,
+          targets: slot.targets,
+        });
         closeModal?.();
-        this._showToast(`Opened ${slot.char} for part assignment.`, 'success', 2200);
+        showToast(`Opened ${slot.char} for part assignment.`, 'success', 2200);
       });
 
       grid.appendChild(card);
@@ -1342,7 +1474,7 @@ class FonttoApp {
   }
 
   _getTargetsForManualSplit(char) {
-    const info = this._decomposeChar(char);
+    const info = decomposeChar(char);
     if (!info) return [];
     return this._getEditTargetsForSyllable(info.cho, info.jung, info.jong);
   }
@@ -1369,6 +1501,141 @@ class FonttoApp {
     }
 
     return extracted;
+  }
+
+  _imageDataFromExtractedMask(extracted) {
+    const imageData = new ImageData(extracted.width, extracted.height);
+    extracted.mask.forEach((value, pixelIndex) => {
+      if (!value) return;
+      const idx = pixelIndex * 4;
+      imageData.data[idx] = 255;
+      imageData.data[idx + 1] = 255;
+      imageData.data[idx + 2] = 255;
+      imageData.data[idx + 3] = 255;
+    });
+    return imageData;
+  }
+
+  _paintManualMaskAtEvent(event, canvas, state) {
+    if (!state.editImageData) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.floor((event.clientX - rect.left) * (canvas.width / rect.width));
+    const y = Math.floor((event.clientY - rect.top) * (canvas.height / rect.height));
+    const radius = Math.max(Math.floor((state.brushSize || 18) / 2), 1);
+    const { width, height, data } = state.editImageData;
+    const minX = Math.max(x - radius, 0);
+    const maxX = Math.min(x + radius, width - 1);
+    const minY = Math.max(y - radius, 0);
+    const maxY = Math.min(y + radius, height - 1);
+    const radiusSq = radius * radius;
+
+    for (let py = minY; py <= maxY; py++) {
+      for (let px = minX; px <= maxX; px++) {
+        const dx = px - x;
+        const dy = py - y;
+        if ((dx * dx) + (dy * dy) > radiusSq) continue;
+        const idx = (py * width + px) * 4;
+        if (state.editMode === 'erase') {
+          data[idx] = 0;
+          data[idx + 1] = 0;
+          data[idx + 2] = 0;
+          data[idx + 3] = 0;
+        } else if (state.editMode === 'draw') {
+          data[idx] = 255;
+          data[idx + 1] = 255;
+          data[idx + 2] = 255;
+          data[idx + 3] = 255;
+        }
+      }
+    }
+  }
+
+  _reextractManualMask(state) {
+    if (!state.editImageData) return;
+    const extracted = extractRasterComponents(state.editImageData);
+    state.extracted = extracted;
+    state.assignments = new Map();
+    state.selectedComponentIds = new Set();
+  }
+
+  _autoAssignManualSplitTargets(state) {
+    if (!state.extracted || !state.targets.length) {
+      return { assigned: 0, needsReview: 0 };
+    }
+
+    const targetRegions = state.targets.map((target, index) => {
+      const selection = this._getSelectionForTarget(target.categoryId, target.jamo);
+      return {
+        index,
+        region: selection?.guide?.targetRegion ?? null,
+      };
+    }).filter((item) => item.region);
+
+    if (!targetRegions.length) {
+      return { assigned: 0, needsReview: state.extracted.components.length };
+    }
+
+    state.assignments = new Map();
+    state.selectedComponentIds = new Set();
+    let assigned = 0;
+    let needsReview = 0;
+
+    state.extracted.components.forEach((component) => {
+      const componentBox = this._componentBoundsToUnitRect(component.bounds, state.extracted.width, state.extracted.height);
+      const ranked = targetRegions
+        .map((target) => ({
+          index: target.index,
+          overlap: this._rectOverlapArea(componentBox, target.region),
+          centerInside: this._rectCenterInside(componentBox, target.region),
+        }))
+        .sort((a, b) => b.overlap - a.overlap);
+
+      const best = ranked[0];
+      const second = ranked[1];
+      const ambiguous = !best
+        || best.overlap < 0.08
+        || (second && second.overlap > 0 && best.overlap / second.overlap < 1.35);
+
+      if (!ambiguous || best?.centerInside) {
+        state.assignments.set(component.id, best.index);
+        assigned += 1;
+      } else {
+        state.selectedComponentIds.add(component.id);
+        needsReview += 1;
+      }
+    });
+
+    return { assigned, needsReview };
+  }
+
+  _componentBoundsToUnitRect(bounds, width, height) {
+    return {
+      x: bounds.minX / width,
+      y: bounds.minY / height,
+      w: bounds.w / width,
+      h: bounds.h / height,
+    };
+  }
+
+  _rectOverlapArea(a, b) {
+    const x1 = Math.max(a.x, b.x);
+    const y1 = Math.max(a.y, b.y);
+    const x2 = Math.min(a.x + a.w, b.x + b.w);
+    const y2 = Math.min(a.y + a.h, b.y + b.h);
+    if (x2 <= x1 || y2 <= y1) return 0;
+    const overlap = (x2 - x1) * (y2 - y1);
+    const area = Math.max(a.w * a.h, 0.0001);
+    return overlap / area;
+  }
+
+  _rectCenterInside(rect, target) {
+    const cx = rect.x + rect.w / 2;
+    const cy = rect.y + rect.h / 2;
+    return cx >= target.x
+      && cx <= target.x + target.w
+      && cy >= target.y
+      && cy <= target.y + target.h;
   }
 
   _renderManualSplitState(canvas, targetList, selectionSummary, state, rerender) {
@@ -1428,7 +1695,12 @@ class FonttoApp {
 
     const selectedCount = state.selectedComponentIds?.size ?? 0;
     const totalAssigned = state.assignments.size;
-    selectionSummary.textContent = `${state.extracted.components.length} groups detected. ${selectedCount} groups selected. ${totalAssigned} groups assigned overall. Right-click the selected groups to assign them.`;
+    const modeText = state.editMode === 'erase'
+      ? 'Erase mode: drag across connected strokes to split them.'
+      : state.editMode === 'draw'
+        ? 'Draw mode: restore missing stroke pixels.'
+        : 'Select mode: click groups, then apply them to the active target.';
+    selectionSummary.textContent = `${state.extracted.components.length} groups detected. ${selectedCount} groups selected. ${totalAssigned} groups assigned overall. ${modeText}`;
   }
 
   _renderManualTargetList(targetList, state, rerender) {
@@ -1441,9 +1713,11 @@ class FonttoApp {
     state.targets.forEach((target, index) => {
       const button = document.createElement('button');
       button.type = 'button';
-      button.className = `tool-btn template-target-btn ${state.activeTargetIndex === index ? 'active' : ''}`;
+      const stored = this._isTargetStored(target);
+      button.className = `tool-btn template-target-btn ${state.activeTargetIndex === index ? 'active' : ''} ${stored ? 'completed' : ''}`;
       const count = [...state.assignments.values()].filter((targetIndex) => targetIndex === index).length;
-      button.textContent = count > 0 ? `${target.label} (${count})` : target.label;
+      const status = stored ? '완료' : '미완료';
+      button.textContent = count > 0 ? `${target.label} (${count}) · ${status}` : `${target.label} · ${status}`;
       button.addEventListener('click', () => {
         if (state.selectedComponentIds?.size) {
           this._assignSelectedComponentsToTarget(state, index);
@@ -1461,6 +1735,12 @@ class FonttoApp {
       });
       targetList.appendChild(button);
     });
+  }
+
+  _isTargetStored(target) {
+    const selection = this._getSelectionForTarget(target.categoryId, target.jamo);
+    if (!selection) return false;
+    return this._getStorageKeysForSelection(selection).some((key) => this.jamoLib[key]?.length);
   }
 
   _toggleManualComponentSelection(state, componentId, additive = false) {
@@ -1546,44 +1826,182 @@ class FonttoApp {
 
   _applyManualSplitAssignments(state) {
     if (!state.extracted || !state.targets.length) {
-      return { applied: 0 };
+      return { applied: 0, reason: 'No glyph image or target list is loaded.' };
+    }
+
+    if (state.selectedComponentIds?.size && state.activeTargetIndex >= 0) {
+      this._assignSelectedComponentsToTarget(state, state.activeTargetIndex);
     }
 
     let applied = 0;
+    const appliedTargets = [];
+    const skipped = [];
     state.targets.forEach((target, index) => {
       const componentIds = [...state.assignments.entries()]
         .filter(([, targetIndex]) => targetIndex === index)
         .map(([componentId]) => componentId);
-      if (!componentIds.length) return;
+      if (!componentIds.length) {
+        skipped.push(`${target.label}: no stroke group assigned`);
+        return;
+      }
 
       const selection = this._getSelectionForTarget(target.categoryId, target.jamo);
-      if (!selection) return;
+      if (!selection) {
+        skipped.push(`${target.label}: no matching target slot`);
+        return;
+      }
 
-      const commands = selectedComponentsToCommands(state.extracted, componentIds, selection.guide?.targetRegion);
-      const strokes = selectedComponentsToStrokes(state.extracted, componentIds, selection.guide?.targetRegion);
-      if (!commands.length) return;
+      let commands = selectedComponentsToPositionedCommands(state.extracted, componentIds);
+      let strokes = selectedComponentsToStrokes(state.extracted, componentIds, selection.guide?.targetRegion);
+      if (!commands.length) {
+        commands = selectedComponentsToCommands(state.extracted, componentIds);
+        strokes = selectedComponentsToStrokes(state.extracted, componentIds);
+      }
+      if (!commands.length) {
+        skipped.push(`${target.label}: selected stroke could not be converted`);
+        return;
+      }
 
-      this._storeImportedSelection(selection, commands, strokes);
+      this._storePendingSelection(selection, commands, strokes, state.char);
       applied += 1;
+      appliedTargets.push(target);
     });
 
     if (applied > 0) {
       if (state.char && state.imageSrc) {
         this.syllableImports[state.char] = {
           imageSrc: state.imageSrc,
+          sourceChar: state.char,
         };
       }
-      const fullLib = deriveAll(this.jamoLib);
-      this.previewPanel.updateJamoLib(fullLib);
-      if (this.browserPanel) this.browserPanel.updateJamoLib(fullLib);
-      this.previewPanel.updateSyllableImports(this.syllableImports);
-      if (this.browserPanel) this.browserPanel.updateSyllableImports(this.syllableImports);
-      this._persistJamoLib();
-      this._checkGenerateReady();
-      this._showToast(`Applied ${applied} split target${applied === 1 ? '' : 's'}.`, 'success', 2600);
+      this._persistState();
+      this._renderPendingPartsPanel();
+      showToast(`Saved ${applied} part${applied === 1 ? '' : 's'} to the pending panel.`, 'success', 2600);
     }
 
-    return { applied };
+    return {
+      applied,
+      reason: skipped.find((item) => !item.includes('no stroke group assigned')) || skipped[0] || '',
+    };
+  }
+
+  _canApplyManualSplit(state) {
+    if (!state.extracted || !state.targets.length) return false;
+    if (state.selectedComponentIds?.size) return true;
+    return state.targets.some((_, index) => [...state.assignments.values()].includes(index));
+  }
+
+  _getAffectedCharsForTargets(targets) {
+    const chars = [];
+    const push = (cho, jung, jong = 0) => {
+      const char = compose(cho, jung, jong);
+      if (!chars.includes(char)) chars.push(char);
+    };
+
+    targets.forEach((target) => {
+      const category = CATEGORIES.find((item) => item.id === target.categoryId);
+      if (!category) return;
+
+      if (target.categoryId.startsWith('cho')) {
+        const cho = CHO.findIndex((item) => item === target.jamo);
+        if (cho < 0) return;
+        const needsFinal = target.categoryId.endsWith('_wf');
+        const wantsVertical = target.categoryId.includes('_v');
+        for (let jung = 0; jung < JUNG.length && chars.length < 18; jung++) {
+          const vowelCategory = getVowelCategory(jung);
+          const matchesVowel = wantsVertical
+            ? vowelCategory === 'vertical'
+            : vowelCategory !== 'vertical';
+          if (!matchesVowel) continue;
+          if (needsFinal) {
+            push(cho, jung, 1);
+            push(cho, jung, 4);
+          } else {
+            push(cho, jung, 0);
+          }
+        }
+        return;
+      }
+
+      if (target.categoryId.startsWith('jung')) {
+        const jung = JUNG.findIndex((item) => item === target.jamo);
+        if (jung < 0) return;
+        const needsFinal = target.categoryId === 'jung_wb';
+        for (let cho = 0; cho < CHO.length && chars.length < 18; cho++) {
+          push(cho, jung, needsFinal ? 1 : 0);
+        }
+        return;
+      }
+
+      if (target.categoryId.startsWith('jong')) {
+        const jong = JONG.findIndex((item) => item === target.jamo);
+        if (jong <= 0) return;
+        const wantsHorizontal = target.categoryId.endsWith('_h');
+        for (let cho = 0; cho < CHO.length && chars.length < 18; cho++) {
+          for (let jung = 0; jung < JUNG.length && chars.length < 18; jung++) {
+            const isHorizontal = getVowelCategory(jung) === 'horizontal';
+            if (wantsHorizontal !== isHorizontal) continue;
+            push(cho, jung, jong);
+          }
+        }
+      }
+    });
+
+    return chars;
+  }
+
+  _storePendingSelection(selection, commands, strokes, sourceChar = '') {
+    const key = `${selection.categoryId}_${selection.jamo}`;
+    this.pendingParts[key] = {
+      selection,
+      commands,
+      strokes,
+      sourceChar,
+      savedAt: Date.now(),
+    };
+  }
+
+  _applyPendingParts() {
+    const parts = Object.values(this.pendingParts);
+    if (parts.length === 0) {
+      showToast('No saved parts to apply.', 'warning', 2200);
+      return;
+    }
+
+    const appliedTargets = [];
+    parts.forEach((part) => {
+      this._storeImportedSelection(part.selection, part.commands, part.strokes);
+      appliedTargets.push({
+        categoryId: part.selection.categoryId,
+        jamo: part.selection.jamo,
+      });
+    });
+
+    this.pendingParts = {};
+    const fullLib = deriveAll(this.jamoLib);
+    this.previewPanel.updateJamoLib(fullLib);
+    if (this.browserPanel) this.browserPanel.updateJamoLib(fullLib);
+    this.previewPanel.updateSyllableImports(this.syllableImports);
+    if (this.browserPanel) this.browserPanel.updateSyllableImports(this.syllableImports);
+    this._persistState();
+    this._checkGenerateReady();
+    this._renderPendingPartsPanel();
+
+    const affectedChars = this._getAffectedCharsForTargets(appliedTargets);
+    if (affectedChars[0]) {
+      this.browserPanel?.focusBrowserChar(affectedChars[0]);
+    }
+    showToast(`Applied ${parts.length} saved part${parts.length === 1 ? '' : 's'} to glyphs.`, 'success', 3000);
+  }
+
+  _clearPendingPart(key) {
+    delete this.pendingParts[key];
+    this._renderPendingPartsPanel();
+  }
+
+  _clearAllPendingParts() {
+    this.pendingParts = {};
+    this._renderPendingPartsPanel();
   }
 
   _getSelectionForTarget(categoryId, jamo) {
@@ -1601,7 +2019,13 @@ class FonttoApp {
   }
 
   _storeImportedSelection(selection, commands, strokes) {
-    const storageKeys = this._getStorageKeysForSelection(selection);
+    const storageKeys = this._getContextStorageKeysForSelection(selection);
+    const broadKeys = this._getBroadStorageKeysForSelection(selection);
+    broadKeys.forEach((storageKey) => {
+      if (!storageKeys.includes(storageKey)) {
+        delete this.jamoLib[storageKey];
+      }
+    });
     storageKeys.forEach((storageKey) => {
       this.jamoLib[storageKey] = commands;
     });
@@ -1691,189 +2115,36 @@ class FonttoApp {
         const x = 20 + ci * (cellSize + 4);
         const y = 10 + li * lineHeight;
 
-        const info = this._decomposeChar(char);
+        const info = decomposeChar(char);
         if (!info) continue;
 
         const commands = composeSyllableFromLib(info.cho, info.jung, info.jong, jamoLib);
-        this._drawGlyphOnCtx(ctx, commands, x, y, cellSize);
+        drawGlyphOnCtx(ctx, commands, x, y, cellSize);
       }
     }
 
     container.appendChild(canvas);
   }
 
-  _decomposeChar(char) {
-    const code = char.charCodeAt(0);
-    if (code < 0xAC00 || code > 0xD7A3) return null;
-    const offset = code - 0xAC00;
-    const cho  = Math.floor(offset / (21 * 28));
-    const jung = Math.floor((offset % (21 * 28)) / 28);
-    const jong = offset % 28;
-    return { cho, jung, jong };
-  }
 
-  _drawGlyphOnCtx(ctx, commands, x, y, size) {
-    if (!commands || commands.length === 0) return;
-    const scale = size / 1000;
 
-    ctx.save();
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-    ctx.beginPath();
 
-    for (const cmd of commands) {
-      switch (cmd.type) {
-        case 'M': ctx.moveTo(x + cmd.x * scale, y + (1000 - cmd.y) * scale); break;
-        case 'L': ctx.lineTo(x + cmd.x * scale, y + (1000 - cmd.y) * scale); break;
-        case 'Q': ctx.quadraticCurveTo(x + cmd.x1 * scale, y + (1000 - cmd.y1) * scale, x + cmd.x * scale, y + (1000 - cmd.y) * scale); break;
-        case 'C': ctx.bezierCurveTo(x + cmd.x1 * scale, y + (1000 - cmd.y1) * scale, x + cmd.x2 * scale, y + (1000 - cmd.y2) * scale, x + cmd.x * scale, y + (1000 - cmd.y) * scale); break;
-        case 'Z': ctx.closePath(); break;
-      }
-    }
 
-    ctx.fill();
-    ctx.restore();
-  }
 
-  // ?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧
-  //  ?고듃 ?앹꽦 紐⑤떖
-  // ?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧
-  _showGenerateModal() {
-    if (!this.jamoGrid?.isAllCompleted()) {
-      this._showIncompleteToast();
-      return;
-    }
 
-    const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay';
-    overlay.innerHTML = `
-      <div class="modal generate-modal">
-        <div class="modal-header">
-          <h2>Generate Font</h2>
-          <button class="modal-close" id="closeGenModal">x</button>
-        </div>
-        <div class="modal-body">
-          <div class="gen-form">
-            <label class="gen-label">
-              <span>Font name</span>
-              <input type="text" class="gen-input" id="fontNameInput" value="MyHangulFont" placeholder="Enter a font name" />
-            </label>
-          </div>
-          <div class="gen-progress" id="genProgress" style="display:none">
-            <div class="gen-progress-bar">
-              <div class="gen-progress-fill" id="genProgressFill"></div>
-            </div>
-            <span class="gen-progress-text" id="genProgressText">Preparing...</span>
-          </div>
-          <div class="gen-actions">
-            <button class="gen-btn" id="genStartBtn">Generate</button>
-            <button class="gen-btn download-btn" id="genDownloadBtn" style="display:none">Download TTF</button>
-          </div>
-        </div>
-      </div>
-    `;
-
-    document.body.appendChild(overlay);
-
-    const closeBtn = document.getElementById('closeGenModal');
-    closeBtn.addEventListener('click', () => overlay.remove());
-
-    const startBtn = document.getElementById('genStartBtn');
-    startBtn.addEventListener('click', () => this._startGeneration());
-  }
-
-  async _startGeneration() {
-    const fontName = document.getElementById('fontNameInput')?.value || 'MyHangulFont';
-    const progressDiv = document.getElementById('genProgress');
-    const progressFill = document.getElementById('genProgressFill');
-    const progressText = document.getElementById('genProgressText');
-    const startBtn = document.getElementById('genStartBtn');
-    const downloadBtn = document.getElementById('genDownloadBtn');
-
-    if (progressDiv) progressDiv.style.display = 'block';
-    if (startBtn) startBtn.disabled = true;
-
-    try {
-      const buffer = generateFont(
-        this.jamoLib,
-        fontName,
-        (progress) => {
-          const pct = Math.round(progress * 100);
-          if (progressFill) progressFill.style.width = `${pct}%`;
-          if (progressText) progressText.textContent = `Generating... ${pct}%`;
-        }
-      );
-
-      if (progressFill) progressFill.style.width = '100%';
-      if (progressText) progressText.textContent = 'Generation complete.';
-
-      this._generatedBuffer = buffer;
-
-      if (downloadBtn) {
-        downloadBtn.style.display = 'block';
-        downloadBtn.onclick = () => {
-          downloadFont(buffer, `${fontName}.ttf`);
-        };
-      }
-    } catch (err) {
-      console.error('Font generation error:', err);
-      if (progressText) progressText.textContent = `Error: ${err.message}`;
-    }
-
-    if (startBtn) startBtn.disabled = false;
-  }
   _handleResize() {
     if (this.drawingCanvas) this.drawingCanvas.resize();
     if (this.previewPanel) this.previewPanel.resize();
     if (this.browserPanel) this.browserPanel.resize();
   }
 
-  _loadSavedJamoLib() {
-    try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === 'object') {
-          this.jamoLib = parsed;
-        }
-      }
-
-      const draftRaw = window.localStorage.getItem(DRAFT_STORAGE_KEY);
-      if (draftRaw) {
-        const parsedDrafts = JSON.parse(draftRaw);
-        if (parsedDrafts && typeof parsedDrafts === 'object') {
-          this.jamoDrafts = parsedDrafts;
-        }
-      }
-
-      const guideRaw = window.localStorage.getItem(GUIDE_BOX_STORAGE_KEY);
-      if (guideRaw) {
-        const parsedGuides = JSON.parse(guideRaw);
-        if (parsedGuides && typeof parsedGuides === 'object') {
-          this.guideOverrides = parsedGuides;
-        }
-      }
-
-      const syllableRaw = window.localStorage.getItem(SYLLABLE_IMPORT_STORAGE_KEY);
-      if (syllableRaw) {
-        const parsedSyllables = JSON.parse(syllableRaw);
-        if (parsedSyllables && typeof parsedSyllables === 'object') {
-          this.syllableImports = parsedSyllables;
-        }
-      }
-    } catch (error) {
-      console.warn('Failed to load saved jamo library:', error);
-    }
-  }
-
-  _persistJamoLib() {
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(this.jamoLib));
-      window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(this.jamoDrafts));
-      window.localStorage.setItem(GUIDE_BOX_STORAGE_KEY, JSON.stringify(this.guideOverrides));
-      window.localStorage.setItem(SYLLABLE_IMPORT_STORAGE_KEY, JSON.stringify(this.syllableImports));
-    } catch (error) {
-      console.warn('Failed to persist jamo library:', error);
-    }
+  _persistState() {
+    saveState({
+      jamoLib: this.jamoLib,
+      jamoDrafts: this.jamoDrafts,
+      guideOverrides: this.guideOverrides,
+      syllableImports: this.syllableImports,
+    });
   }
 
   _applyGuideOverride(categoryId, itemKey, guide) {
@@ -1899,7 +2170,7 @@ class FonttoApp {
       delete this.guideOverrides[this.currentSelectionKey];
     }
 
-    this._persistJamoLib();
+    this._persistState();
   }
 
   _resetGuideRegionForCurrentSelection() {
@@ -1913,9 +2184,9 @@ class FonttoApp {
         selection.guide
       )
     ];
-    this._persistJamoLib();
+    this._persistState();
     this.drawingCanvas.resetGuideTargetRegion(false);
-    this._showToast('Target box reset to the default guide.', 'success', 1800);
+    showToast('Target box reset to the default guide.', 'success', 1800);
   }
 
   _getGuideOverrideKey(categoryId, itemKey, guide) {
@@ -1928,6 +2199,20 @@ class FonttoApp {
       : [`${selection.categoryId}_${selection.jamo}`];
 
     return [...new Set(keys)];
+  }
+
+  _getContextStorageKeysForSelection(selection) {
+    // In the 237-jamo architecture, the storage key is simply ${categoryId}_${jamo}
+    // (e.g. cho_v_ㄱ, cho_v_wf_ㄱ, jung_nb_ㅏ, jong_h_ㄱ).
+    // No legacy context filtering needed.
+    return this._getStorageKeysForSelection(selection);
+  }
+
+  _getBroadStorageKeysForSelection(selection) {
+    // In the 237-jamo architecture, the storage key is always the same
+    // as the context key. No broader fallback keys needed.
+    if (!selection?.categoryId || !selection?.jamo) return [];
+    return [`${selection.categoryId}_${selection.jamo}`];
   }
 
   _isTrackedInputKey(key) {
@@ -2020,7 +2305,7 @@ class FonttoApp {
 
   _showQualityToast(warnings) {
     const uniqueMessages = this._getQualityMessages(warnings);
-    this._showToast(`Saved. ${uniqueMessages.join(' / ')}`, 'warning', 4200);
+    showToast(`Saved. ${uniqueMessages.join(' / ')}`, 'warning', 4200);
   }
 
   _showQualityConfirmModal(report, onConfirm) {
@@ -2061,24 +2346,8 @@ class FonttoApp {
     });
   }
 
-  _showToast(message, variant = '', duration = 3000) {
-    const toast = document.createElement('div');
-    toast.className = `toast${variant ? ` toast-${variant}` : ''}`;
-    toast.textContent = message;
-    document.body.appendChild(toast);
-    setTimeout(() => {
-      toast.classList.add('toast-fade');
-      setTimeout(() => toast.remove(), 500);
-    }, duration);
-  }
-}
-import { composeSyllable } from './core/composer.js';
 
-function composeSyllableFromLib(cho, jung, jong, jamoLib) {
-  return composeSyllable(cho, jung, jong, jamoLib);
 }
 
-// ?? ???쒖옉 ??
+// App bootstrap
 const fonttoApp = new FonttoApp();
-
-
