@@ -25,7 +25,7 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
         <div class="template-manual">
           <div class="template-manual-header">
             <h3>Split One Syllable</h3>
-            <p>Select the parts you want to reuse, then right-click to assign them to the matching initial, medial, or final target.</p>
+            <p>Select the parts you want to reuse, assign them to a target, then apply them directly to the matching glyph cards.</p>
           </div>
           <div class="template-manual-controls">
             <input type="text" class="gen-input template-syllable-input" id="splitSyllableInput" maxlength="1" placeholder="한" value="${initialChar}" />
@@ -43,7 +43,7 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
               <button type="button" class="tool-btn" id="splitClearSelectionBtn" disabled>Clear Selection</button>
               <button type="button" class="tool-btn" id="splitClearAssignmentsBtn" disabled>Clear Assignments</button>
             </div>
-            <button class="gen-btn" id="splitApplySelectionBtn" disabled>Save Selected Parts</button>
+            <button class="gen-btn" id="splitApplySelectionBtn" disabled>Apply to Glyph Cards</button>
           </div>
           <div class="template-status" id="splitManualStatus">Load or replace the syllable image, then assign its parts.</div>
           <div class="template-manual-layout">
@@ -113,7 +113,7 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
     state.editImageData = imageDataFromExtractedMask(state.extracted);
     state.assignments = new Map();
     state.selectedComponentIds = new Set();
-    manualStatus.textContent = `Detected ${state.extracted.components.length} stroke groups. Select groups, then right-click to assign them.`;
+    manualStatus.textContent = `Detected ${state.extracted.components.length} stroke groups. Select groups, assign targets, then apply them to glyph cards.`;
     render();
   };
 
@@ -227,8 +227,8 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
   applyBtn.addEventListener('click', () => {
     const result = app._applyManualSplitAssignments(state);
     manualStatus.textContent = result.applied > 0
-      ? `Saved ${result.applied} part${result.applied === 1 ? '' : 's'} to the pending panel.`
-      : `Saved 0 parts: ${result.reason || 'select a stroke group and target first.'}`;
+      ? `Applied ${result.applied} part${result.applied === 1 ? '' : 's'} to the matching glyph card${result.applied === 1 ? '' : 's'}.`
+      : `Applied 0 parts: ${result.reason || 'select a stroke group and target first.'}`;
     render();
   });
 

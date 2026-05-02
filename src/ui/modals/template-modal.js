@@ -53,7 +53,7 @@ export function showTemplateModal(app) {
               <input type="text" class="gen-input template-syllable-input" id="templateSyllableInput" maxlength="1" placeholder="한" />
               <label class="gen-btn template-upload-btn" for="templateSingleFileInput">Upload Syllable Image</label>
               <input type="file" id="templateSingleFileInput" accept="image/*" class="template-file-input" />
-            <button class="gen-btn" id="templateApplySelectionBtn" disabled>Save Selected Parts</button>
+            <button class="gen-btn" id="templateApplySelectionBtn" disabled>Apply to Glyph Cards</button>
             </div>
             <div class="template-status" id="templateManualStatus">Choose one Hangul syllable and an image containing only that syllable.</div>
             <div class="template-manual-layout">
@@ -195,8 +195,8 @@ export function showTemplateModal(app) {
   applyBtn.addEventListener('click', () => {
     const result = app._applyManualSplitAssignments(manualState);
     manualStatus.textContent = result.applied > 0
-      ? `Saved ${result.applied} part${result.applied === 1 ? '' : 's'} to the pending panel.`
-      : `Saved 0 parts: ${result.reason || 'select a stroke group and target first.'}`;
+      ? `Applied ${result.applied} part${result.applied === 1 ? '' : 's'} to the matching glyph card${result.applied === 1 ? '' : 's'}.`
+      : `Applied 0 parts: ${result.reason || 'select a stroke group and target first.'}`;
     renderManual();
   });
 
@@ -296,7 +296,7 @@ function renderTemplateImportReview(app, container, importedSlots, closeModal) {
   container.innerHTML = `
     <div class="template-import-review-header">
       <h3>Extracted Source Syllables</h3>
-      <p>Click a card to split it, then right-click the selected strokes to apply the needed part to the matching jamo slots.</p>
+      <p>Click a card to split it, then assign selected strokes to apply the needed part to the matching glyph cards.</p>
     </div>
     <div class="template-import-review-grid"></div>
   `;

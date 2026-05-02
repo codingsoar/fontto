@@ -32,6 +32,10 @@ const findJongIndex = (jamo) => JONG.findIndex((item) => item === jamo);
 const choExamples = (jungIdx, jongIdx = 0) => CHO.map((jamo) => syllable(findChoIndex(jamo), jungIdx, jongIdx));
 const jungExamples = (jongIdx = 0) => JUNG.map((jamo) => syllable(0, findJungIndex(jamo), jongIdx));
 const jongExamples = (jungIdx) => JONG.slice(1).map((jamo) => syllable(0, jungIdx, findJongIndex(jamo)));
+const ASCII_UPPER = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+const ASCII_LOWER = 'abcdefghijklmnopqrstuvwxyz'.split('');
+const ASCII_DIGITS = '0123456789'.split('');
+const ASCII_SYMBOLS = ['.', ',', '!', '?', ':', ';', "'", '"', '(', ')', '[', ']', '-', '/', '@', '#', '&', '*'];
 
 export const CATEGORIES = [
   {
@@ -115,16 +119,32 @@ export const CATEGORIES = [
   {
     id: 'ascii_upper',
     label: 'Uppercase (A-Z)',
-    items: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split(''),
-    examples: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split(''),
+    items: ASCII_UPPER,
+    examples: ASCII_UPPER,
+    guideType: 'ascii',
+    required: false,
+  },
+  {
+    id: 'ascii_lower',
+    label: 'Lowercase (a-z)',
+    items: ASCII_LOWER,
+    examples: ASCII_LOWER,
     guideType: 'ascii',
     required: false,
   },
   {
     id: 'ascii_digit',
     label: 'Digits (0-9)',
-    items: '0123456789'.split(''),
-    examples: '0123456789'.split(''),
+    items: ASCII_DIGITS,
+    examples: ASCII_DIGITS,
+    guideType: 'ascii',
+    required: false,
+  },
+  {
+    id: 'ascii_symbol',
+    label: 'Symbols',
+    items: ASCII_SYMBOLS,
+    examples: ASCII_SYMBOLS,
     guideType: 'ascii',
     required: false,
   },
@@ -301,6 +321,7 @@ export function buildGuideMeta(categoryId, jamo, example) {
         sparseLengthRatio: 0.22,
         allowThinY: true,
       });
+      return guide;
     case 'ascii':
       guide.targetIndices = [0];
       guide.label = `Draw ${jamo}`;

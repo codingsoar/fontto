@@ -1,10 +1,10 @@
 /**
- * ascii-derive.js — derive lowercase, symbols from user-drawn uppercase + digits
+ * ascii-derive.js — derive or collect ASCII glyphs
  *
  * Strategy:
- *  - User draws A-Z (26) + 0-9 (10) = 36 glyphs
- *  - Lowercase a-z is derived by scaling uppercase down to 75% and shifting baseline
- *  - Basic punctuation/symbols get simple geometric fallbacks
+ *  - User can draw A-Z, a-z, 0-9, and selected symbols
+ *  - Missing lowercase a-z can be derived from uppercase
+ *  - Basic punctuation/symbols get simple geometric fallbacks when not drawn
  */
 
 import { composeSyllable } from './composer.js';
@@ -62,8 +62,8 @@ export function deriveLowercase(upperCommands) {
 }
 
 /**
- * Derive all ASCII glyphs from a library of user-drawn uppercase + digits.
- * @param {Object} asciiLib — keys like 'ascii_A', 'ascii_B', ..., 'ascii_0', etc.
+ * Derive all ASCII glyphs from user-drawn ASCII entries.
+ * @param {Object} asciiLib — keys like 'ascii_A', 'ascii_a', 'ascii_0', 'ascii_!', etc.
  * @returns {Object} — full ASCII glyph library with keys 'ascii_33' through 'ascii_126'
  */
 export function deriveAsciiGlyphs(asciiLib) {
@@ -78,9 +78,16 @@ export function deriveAsciiGlyphs(asciiLib) {
     }
   }
 
-  // Derive lowercase a-z (charCode 97-122) from uppercase
+  // Copy lowercase a-z from user input, or derive from uppercase when missing
   for (let i = 97; i <= 122; i++) {
-    const upperLetter = String.fromCharCode(i - 32);
+    const letter = String.fromCharCode(i);
+    const key = `ascii_${letter}`;
+    if (asciiLib[key]?.length) {
+      result[`ascii_${i}`] = asciiLib[key];
+      continue;
+    }
+
+    const upperLetter = letter.toUpperCase();
     const upperKey = `ascii_${upperLetter}`;
     if (asciiLib[upperKey]?.length) {
       result[`ascii_${i}`] = deriveLowercase(asciiLib[upperKey]);
@@ -95,6 +102,16 @@ export function deriveAsciiGlyphs(asciiLib) {
       result[`ascii_${i}`] = asciiLib[key];
     }
   }
+
+  // Copy directly drawn symbols from user input
+  const userDrawnSymbols = ['.', ',', '!', '?', ':', ';', "'", '"', '(', ')', '[', ']', '-', '/', '@', '#', '&', '*'];
+  userDrawnSymbols.forEach((symbol) => {
+    const code = symbol.charCodeAt(0);
+    const key = `ascii_${symbol}`;
+    if (asciiLib[key]?.length) {
+      result[`ascii_${code}`] = asciiLib[key];
+    }
+  });
 
   // Generate basic symbol fallbacks
   const symbolGenerators = {

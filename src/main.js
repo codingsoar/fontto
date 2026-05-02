@@ -855,6 +855,11 @@ class FonttoApp {
   _getEditTargetsForSyllable(choIdx, jungIdx, jongIdx) {
     const targets = [];
     const vowelCategory = getVowelCategory(jungIdx);
+    const jongCategoryId = vowelCategory === 'horizontal'
+      ? 'jong_h'
+      : vowelCategory === 'complex'
+        ? 'jong_m'
+        : 'jong_v';
     const hasFinal = jongIdx > 0;
     const choInfo = getChoInfo(choIdx);
     const jungInfo = getJungInfo(jungIdx);
@@ -886,7 +891,7 @@ class FonttoApp {
     if (jongIdx > 0) {
       if (jongInfo?.isCompound) {
         targets.push({
-          categoryId: vowelCategory === 'horizontal' ? 'jong_cluster_h' : 'jong_cluster',
+          categoryId: jongCategoryId,
           jamo: jongInfo.base,
           label: `겹받침 ${jongInfo.base} 적용 (${jongContext})`,
         });
@@ -902,7 +907,7 @@ class FonttoApp {
 
       jongItems.forEach((jamo, index) => {
         targets.push({
-          categoryId: vowelCategory === 'horizontal' ? 'jong_h' : 'jong',
+          categoryId: jongCategoryId,
           jamo,
           label: `종성 ${jamo} 적용 (${jongContext})${jongItems.length > 1 ? ` ${index + 1}` : ''}`,
         });
@@ -946,7 +951,7 @@ class FonttoApp {
                 <input type="text" class="gen-input template-syllable-input" id="templateSyllableInput" maxlength="1" placeholder="한" />
                 <label class="gen-btn template-upload-btn" for="templateSingleFileInput">Upload Syllable Image</label>
                 <input type="file" id="templateSingleFileInput" accept="image/*" class="template-file-input" />
-              <button class="gen-btn" id="templateApplySelectionBtn" disabled>Save Selected Parts</button>
+              <button class="gen-btn" id="templateApplySelectionBtn" disabled>Apply to Glyph Cards</button>
               </div>
               <div class="template-status" id="templateManualStatus">Choose one Hangul syllable and an image containing only that syllable.</div>
               <div class="template-manual-layout">
@@ -1079,8 +1084,8 @@ class FonttoApp {
     applyBtn.addEventListener('click', () => {
       const result = this._applyManualSplitAssignments(manualState);
       manualStatus.textContent = result.applied > 0
-        ? `Saved ${result.applied} part${result.applied === 1 ? '' : 's'} to the pending panel.`
-        : `Saved 0 parts: ${result.reason || 'select a stroke group and target first.'}`;
+        ? `Applied ${result.applied} part${result.applied === 1 ? '' : 's'} to the matching glyph card${result.applied === 1 ? '' : 's'}.`
+        : `Applied 0 parts: ${result.reason || 'select a stroke group and target first.'}`;
       renderManual();
     });
 
@@ -1115,7 +1120,7 @@ class FonttoApp {
                 <button type="button" class="tool-btn" id="splitAutoAssignBtn">Auto Assign</button>
                 <label class="template-brush-control">Brush <input type="range" id="splitBrushSizeInput" min="6" max="42" value="18" /></label>
               </div>
-              <button class="gen-btn" id="splitApplySelectionBtn" disabled>Save Selected Parts</button>
+              <button class="gen-btn" id="splitApplySelectionBtn" disabled>Apply to Glyph Cards</button>
             </div>
             <div class="template-status" id="splitManualStatus">Load or replace the syllable image, then assign its parts.</div>
             <div class="template-manual-layout">
@@ -1275,8 +1280,8 @@ class FonttoApp {
     applyBtn.addEventListener('click', () => {
       const result = this._applyManualSplitAssignments(state);
       manualStatus.textContent = result.applied > 0
-        ? `Saved ${result.applied} part${result.applied === 1 ? '' : 's'} to the pending panel.`
-        : `Saved 0 parts: ${result.reason || 'select a stroke group and target first.'}`;
+        ? `Applied ${result.applied} part${result.applied === 1 ? '' : 's'} to the matching glyph card${result.applied === 1 ? '' : 's'}.`
+        : `Applied 0 parts: ${result.reason || 'select a stroke group and target first.'}`;
       render();
     });
 
@@ -1862,7 +1867,7 @@ class FonttoApp {
         return;
       }
 
-      this._storePendingSelection(selection, commands, strokes, state.char);
+      this._storeImportedSelection(selection, commands, strokes);
       applied += 1;
       appliedTargets.push(target);
     });
@@ -1874,9 +1879,19 @@ class FonttoApp {
           sourceChar: state.char,
         };
       }
+      const fullLib = deriveAll(this.jamoLib);
+      this.previewPanel.updateJamoLib(fullLib);
+      if (this.browserPanel) this.browserPanel.updateJamoLib(fullLib);
+      this.previewPanel.updateSyllableImports(this.syllableImports);
+      if (this.browserPanel) this.browserPanel.updateSyllableImports(this.syllableImports);
       this._persistState();
+      this._checkGenerateReady();
       this._renderPendingPartsPanel();
-      showToast(`Saved ${applied} part${applied === 1 ? '' : 's'} to the pending panel.`, 'success', 2600);
+      const affectedChars = this._getAffectedCharsForTargets(appliedTargets);
+      if (affectedChars[0]) {
+        this.browserPanel?.focusBrowserChar(affectedChars[0]);
+      }
+      showToast(`Applied ${applied} part${applied === 1 ? '' : 's'} to matching glyph cards.`, 'success', 2600);
     }
 
     return {
