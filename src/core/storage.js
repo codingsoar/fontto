@@ -8,10 +8,12 @@ const GUIDE_BOX_STORAGE_KEY = 'fontto-guide-boxes-v1';
 const SYLLABLE_IMPORT_STORAGE_KEY = 'fontto-syllable-imports-v1';
 const TEMPLATE_SOURCE_STORAGE_KEY = 'fontto-template-sources-v1';
 const DOWNLOAD_ACCESS_STORAGE_KEY = 'fontto-download-access-v1';
+const PENDING_PARTS_STORAGE_KEY = 'fontto-pending-parts-v1';
+const SYLLABLE_OVERRIDE_STORAGE_KEY = 'fontto-syllable-overrides-v1';
 
 /**
  * Load all saved state from localStorage
- * @returns {{ jamoLib: Object, jamoDrafts: Object, guideOverrides: Object, syllableImports: Object, templateImportedSlots: Array, downloadAccess: Object }}
+ * @returns {{ jamoLib: Object, jamoDrafts: Object, guideOverrides: Object, syllableImports: Object, templateImportedSlots: Array, downloadAccess: Object, pendingParts: Object }}
  */
 export function loadState() {
   const state = {
@@ -25,6 +27,7 @@ export function loadState() {
       fontName: '',
       unlockedAt: '',
     },
+    pendingParts: {},
   };
 
   try {
@@ -79,6 +82,14 @@ export function loadState() {
         };
       }
     }
+
+    const pendingPartsRaw = window.localStorage.getItem(PENDING_PARTS_STORAGE_KEY);
+    if (pendingPartsRaw) {
+      const parsedPendingParts = JSON.parse(pendingPartsRaw);
+      if (parsedPendingParts && typeof parsedPendingParts === 'object') {
+        state.pendingParts = parsedPendingParts;
+      }
+    }
   } catch (error) {
     console.warn('Failed to load saved jamo library:', error);
   }
@@ -88,7 +99,7 @@ export function loadState() {
 
 /**
  * Persist all state to localStorage
- * @param {{ jamoLib: Object, jamoDrafts: Object, guideOverrides: Object, syllableImports: Object, templateImportedSlots: Array, downloadAccess: Object }} state
+ * @param {{ jamoLib: Object, jamoDrafts: Object, guideOverrides: Object, syllableImports: Object, templateImportedSlots: Array, downloadAccess: Object, pendingParts: Object }} state
  */
 export function saveState(state) {
   try {
@@ -102,7 +113,25 @@ export function saveState(state) {
       fontName: '',
       unlockedAt: '',
     }));
+    window.localStorage.setItem(PENDING_PARTS_STORAGE_KEY, JSON.stringify(state.pendingParts || {}));
   } catch (error) {
     console.warn('Failed to persist jamo library:', error);
+  }
+}
+
+export function clearState() {
+  try {
+    [
+      STORAGE_KEY,
+      DRAFT_STORAGE_KEY,
+      GUIDE_BOX_STORAGE_KEY,
+      SYLLABLE_IMPORT_STORAGE_KEY,
+      TEMPLATE_SOURCE_STORAGE_KEY,
+      DOWNLOAD_ACCESS_STORAGE_KEY,
+      PENDING_PARTS_STORAGE_KEY,
+      SYLLABLE_OVERRIDE_STORAGE_KEY,
+    ].forEach((key) => window.localStorage.removeItem(key));
+  } catch (error) {
+    console.warn('Failed to clear saved jamo library:', error);
   }
 }

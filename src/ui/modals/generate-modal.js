@@ -95,6 +95,7 @@ async function startGeneration(app) {
 
   if (progressDiv) progressDiv.style.display = 'block';
   if (startBtn) startBtn.disabled = true;
+  app._persistState?.();
 
   try {
     const buffer = generateFont(

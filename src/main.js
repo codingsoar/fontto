@@ -28,7 +28,7 @@ import {
 import { renderPdfFileToCanvases } from './core/pdf-renderer.js';
 import { buildTemplatePdfBytes } from './core/template-pdf.js';
 import { CHO, JUNG, JONG, compose, getVowelCategory, getJongInfo } from './core/hangul.js';
-import { loadState, saveState } from './core/storage.js';
+import { loadState, saveState, clearState } from './core/storage.js';
 import { decomposeChar, composeSyllableFromLib, composeCharFromLib, drawGlyphOnCtx, drawPathCommands, createGlyphCanvas, createPartPreviewCanvas } from './core/glyph-utils.js';
 import { showToast } from './ui/toast.js';
 import { showPreviewModal } from './ui/modals/preview-modal.js';
@@ -79,6 +79,7 @@ class FonttoApp {
     this.guideOverrides = saved.guideOverrides;
     this.syllableImports = saved.syllableImports;
     this.templateImportedSlots = saved.templateImportedSlots || [];
+    this.pendingParts = saved.pendingParts || {};
     this.downloadAccess = saved.downloadAccess || {
       unlocked: false,
       fontName: '',
@@ -86,6 +87,8 @@ class FonttoApp {
     };
     this._showLanding();
     window.addEventListener('resize', () => this._handleResize());
+    window.addEventListener('pagehide', () => this._persistState());
+    window.addEventListener('beforeunload', () => this._persistState());
   }
 
   // ?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧
@@ -141,6 +144,15 @@ class FonttoApp {
     document.getElementById('startTemplateBtn').addEventListener('click', () => {
       this._showEditor('template');
     });
+    const landingActions = app.querySelector('.landing-start-actions');
+    if (landingActions && !document.getElementById('resetAllDataBtn')) {
+      const resetBtn = document.createElement('button');
+      resetBtn.className = 'start-btn ghost';
+      resetBtn.id = 'resetAllDataBtn';
+      resetBtn.innerHTML = '<span>Reset All Data</span>';
+      resetBtn.addEventListener('click', () => this._showResetAllDataConfirm());
+      landingActions.appendChild(resetBtn);
+    }
   }
   _showEditor(initialMode = 'draw') {
     this.currentStep = 'editor';
@@ -318,6 +330,16 @@ class FonttoApp {
     document.getElementById('previewBtn').addEventListener('click', () => {
       showPreviewModal(this);
     });
+    const headerRight = document.querySelector('.header-right');
+    const generateBtn = document.getElementById('generateBtn');
+    if (headerRight && generateBtn && !document.getElementById('resetEditorDataBtn')) {
+      const resetBtn = document.createElement('button');
+      resetBtn.className = 'header-btn danger';
+      resetBtn.id = 'resetEditorDataBtn';
+      resetBtn.textContent = 'Reset';
+      resetBtn.addEventListener('click', () => this._showResetAllDataConfirm());
+      headerRight.insertBefore(resetBtn, generateBtn);
+    }
     document.getElementById('reviewBtn').addEventListener('click', () => {
       showReviewModal(this);
     });
@@ -2779,6 +2801,7 @@ class FonttoApp {
       sourceChar,
       savedAt: Date.now(),
     };
+    this._persistState();
   }
 
   _applyPendingParts() {
@@ -2799,6 +2822,7 @@ class FonttoApp {
     });
 
     this.pendingParts = {};
+    this._persistState();
     const fullLib = deriveAll(this.jamoLib);
     this.previewPanel.updateJamoLib(fullLib);
     if (this.browserPanel) this.browserPanel.updateJamoLib(fullLib);
@@ -2820,6 +2844,7 @@ class FonttoApp {
     if (!this.pendingParts[key]) return;
     this._recordHistory('저장된 부분 삭제');
     delete this.pendingParts[key];
+    this._persistState();
     this._renderPendingPartsPanel();
   }
 
@@ -2827,6 +2852,7 @@ class FonttoApp {
     if (Object.keys(this.pendingParts).length === 0) return;
     this._recordHistory('저장된 부분 비우기');
     this.pendingParts = {};
+    this._persistState();
     this._renderPendingPartsPanel();
   }
 
@@ -2976,6 +3002,63 @@ class FonttoApp {
     this.templateBrowserPanel?.updateSyllableImports(this.syllableImports);
   }
 
+  _resetAllData() {
+    clearState();
+    this.jamoLib = {};
+    this.jamoDrafts = {};
+    this.guideOverrides = {};
+    this.syllableImports = {};
+    this.templateImportedSlots = [];
+    this.pendingParts = {};
+    this.downloadAccess = {
+      unlocked: false,
+      fontName: '',
+      unlockedAt: '',
+    };
+    this.reviewState = getDefaultReviewState();
+    this.reviewReturnContext = null;
+    this.recentEditedKeys = [];
+    this.currentSelectionKey = null;
+    this._generatedBuffer = null;
+    this._generatedFontName = '';
+    this.undoStack = [];
+    this.redoStack = [];
+    this._showLanding();
+    showToast('모든 저장된 작업을 초기화했습니다.', 'success', 2400);
+  }
+
+  _showResetAllDataConfirm() {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal quality-confirm-modal">
+        <div class="modal-header">
+          <h2>Reset All Data</h2>
+          <button class="modal-close" id="closeResetAllDataModal">x</button>
+        </div>
+        <div class="modal-body quality-confirm-body">
+          <p class="quality-confirm-copy">저장된 자모, 가져온 글자, 저장된 부분, 세부 조정값까지 모두 삭제합니다. 이 작업은 되돌릴 수 없습니다.</p>
+          <div class="quality-confirm-actions">
+            <button class="gen-btn" id="resetAllDataCancelBtn">Cancel</button>
+            <button class="gen-btn download-btn" id="resetAllDataConfirmBtn">Delete All</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) close();
+    });
+    document.getElementById('closeResetAllDataModal')?.addEventListener('click', close);
+    document.getElementById('resetAllDataCancelBtn')?.addEventListener('click', close);
+    document.getElementById('resetAllDataConfirmBtn')?.addEventListener('click', () => {
+      close();
+      this._resetAllData();
+    });
+  }
+
   _persistState() {
     saveState({
       jamoLib: this.jamoLib,
@@ -2984,6 +3067,7 @@ class FonttoApp {
       syllableImports: this.syllableImports,
       templateImportedSlots: this.templateImportedSlots,
       downloadAccess: this.downloadAccess,
+      pendingParts: this.pendingParts,
     });
   }
 

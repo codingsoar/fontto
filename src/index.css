@@ -215,6 +215,18 @@ body {
   border-color: var(--border-active);
 }
 
+.start-btn.ghost {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: none;
+  color: var(--text-secondary);
+}
+
+.start-btn.ghost:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
 .start-btn:hover {
   transform: translateY(-2px) scale(1.02);
   box-shadow: 0 6px 30px rgba(124, 92, 252, 0.5);
@@ -373,6 +385,16 @@ body {
 
 .header-btn.primary:hover {
   box-shadow: var(--accent-glow);
+}
+
+.header-btn.danger {
+  border-color: rgba(255, 107, 107, 0.28);
+  color: #ffb0b0;
+}
+
+.header-btn.danger:hover {
+  background: rgba(255, 107, 107, 0.08);
+  border-color: rgba(255, 107, 107, 0.4);
 }
 
 .header-btn:disabled {
