@@ -39,7 +39,7 @@ export function showReviewModal(app) {
   if (!app.jamoGrid?.isAllCompleted()) {
     const completedCount = app._getCompletedCount();
     const remaining = Math.max(REQUIRED_JAMO_COUNT - completedCount, 0);
-    showToast(`You still have ${remaining} required jamo to complete before review or export.`);
+    showToast(`검수하거나 내보내려면 필수 자모 ${remaining}개를 더 완성해야 합니다.`);
     return;
   }
 
@@ -54,28 +54,28 @@ export function showReviewModal(app) {
   overlay.innerHTML = `
     <div class="modal review-modal">
       <div class="modal-header">
-        <h2>Full Set Review</h2>
+        <h2>전체 글자 검수</h2>
         <button class="modal-close" id="closeReviewModal">x</button>
       </div>
       <div class="modal-body review-body">
         <div class="review-toolbar">
           <div class="review-presets" id="reviewPresetGroup">
-            <button class="gen-btn review-preset-btn" data-review-mode="all">All</button>
-            <button class="gen-btn review-preset-btn" data-review-mode="common">Common</button>
-            <button class="gen-btn review-preset-btn" data-review-mode="recent">Recently edited</button>
+            <button class="gen-btn review-preset-btn" data-review-mode="all">전체</button>
+            <button class="gen-btn review-preset-btn" data-review-mode="common">자주 쓰는 글자</button>
+            <button class="gen-btn review-preset-btn" data-review-mode="recent">최근 수정</button>
           </div>
           <div class="review-pagination">
-            <button class="gen-btn" id="reviewPrevBtn">Prev</button>
+              <button class="gen-btn" id="reviewPrevBtn">이전</button>
             <span class="review-page-label" id="reviewPageLabel"></span>
-            <button class="gen-btn" id="reviewNextBtn">Next</button>
+              <button class="gen-btn" id="reviewNextBtn">다음</button>
           </div>
           <div class="review-search">
-            <input type="text" class="gen-input review-search-input" id="reviewSearchInput" maxlength="1" placeholder="Glyph" />
-            <button class="gen-btn" id="reviewSearchBtn">Find</button>
+              <input type="text" class="gen-input review-search-input" id="reviewSearchInput" maxlength="1" placeholder="글자" />
+              <button class="gen-btn" id="reviewSearchBtn">찾기</button>
           </div>
           <div class="review-combo">
-            <input type="text" class="gen-input review-combo-input" id="reviewComboInput" placeholder="Search by jamo sequence" />
-            <button class="gen-btn" id="reviewComboBtn">Filter</button>
+              <input type="text" class="gen-input review-combo-input" id="reviewComboInput" placeholder="자모 조합으로 검색" />
+              <button class="gen-btn" id="reviewComboBtn">필터</button>
           </div>
         </div>
         <div class="review-layout">
@@ -305,8 +305,8 @@ function renderReviewPage(gridEl, inspectorEl, pageLabelEl, state, jamoLib, app)
   const pageChars = chars.slice(pageStart, pageStart + state.pageSize);
 
   if (pageChars.length === 0) {
-    pageLabelEl.textContent = '0 / 0 - 0 glyphs';
-    gridEl.innerHTML = '<div class="review-empty">No glyphs match the current filter.</div>';
+    pageLabelEl.textContent = '0 / 0 - 0자';
+    gridEl.innerHTML = '<div class="review-empty">현재 필터와 일치하는 글자가 없습니다.</div>';
     renderReviewEmptyState(inspectorEl);
     return;
   }
@@ -315,7 +315,7 @@ function renderReviewPage(gridEl, inspectorEl, pageLabelEl, state, jamoLib, app)
     state.selectedChar = pageChars[0];
   }
 
-  pageLabelEl.textContent = `${state.page + 1} / ${totalPages} - ${chars.length} glyphs`;
+  pageLabelEl.textContent = `${state.page + 1} / ${totalPages} - ${chars.length}자`;
   gridEl.innerHTML = '';
 
   pageChars.forEach((char) => {
@@ -326,7 +326,7 @@ function renderReviewPage(gridEl, inspectorEl, pageLabelEl, state, jamoLib, app)
     const button = document.createElement('button');
     button.className = `review-glyph-card ${char === state.selectedChar ? 'active' : ''}`;
     button.title = char;
-    button.setAttribute('aria-label', `Review glyph ${char}`);
+    button.setAttribute('aria-label', `${char} 글자 검수`);
     button.addEventListener('click', () => {
       state.selectedChar = char;
       renderReviewPage(gridEl, inspectorEl, pageLabelEl, state, jamoLib, app);
@@ -354,14 +354,14 @@ function renderReviewInspector(container, char, jamoLib, app) {
 
   const title = document.createElement('h3');
   title.className = 'review-inspector-title';
-  title.textContent = `Glyph ${char}`;
+  title.textContent = `글자 ${char}`;
 
   const canvas = createGlyphCanvas(commands, 180);
   canvas.classList.add('review-inspector-canvas');
 
   const subtitle = document.createElement('p');
   subtitle.className = 'review-inspector-subtitle';
-  subtitle.textContent = 'Jump back to the related jamo task to fix this glyph.';
+  subtitle.textContent = '이 글자를 고치려면 관련 자모 입력 항목으로 이동하세요.';
 
   const list = document.createElement('div');
   list.className = 'review-edit-targets';
@@ -391,7 +391,7 @@ function renderReviewInspector(container, char, jamoLib, app) {
   const fineTuneBtn = document.createElement('button');
   fineTuneBtn.className = 'gen-btn download-btn';
   fineTuneBtn.style.width = '100%';
-  fineTuneBtn.textContent = 'Fine-tune (Override)';
+  fineTuneBtn.textContent = '세부 조정';
   fineTuneBtn.addEventListener('click', () => {
     showSyllableEditorModal(app, char);
     const closeButton = document.getElementById('closeReviewModal');
@@ -409,8 +409,8 @@ function renderReviewInspector(container, char, jamoLib, app) {
 function renderReviewEmptyState(container) {
   container.innerHTML = `
     <div class="review-empty-panel">
-      <h3 class="review-inspector-title">No selection</h3>
-      <p class="review-inspector-subtitle">Change the filter or pick a glyph from the review grid.</p>
+      <h3 class="review-inspector-title">선택된 글자가 없습니다</h3>
+      <p class="review-inspector-subtitle">필터를 바꾸거나 검수 목록에서 글자를 선택하세요.</p>
     </div>
   `;
 }

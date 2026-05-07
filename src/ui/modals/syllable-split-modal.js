@@ -18,39 +18,49 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
   overlay.innerHTML = `
     <div class="modal template-modal">
       <div class="modal-header">
-        <h2>Edit Imported Syllable</h2>
+        <h2>가져온 글자 편집</h2>
         <button class="modal-close" id="closeSyllableSplitModal">x</button>
       </div>
       <div class="modal-body template-body">
         <div class="template-manual">
           <div class="template-manual-header">
-            <h3>Split One Syllable</h3>
-            <p>Select the parts you want to reuse, assign them to a target, then apply them directly to the matching glyph cards.</p>
+            <div>
+              <h3>글자 하나 분리하기</h3>
+              <p>재사용할 부분을 선택하고 적용 대상을 지정한 뒤, 일치하는 글자 카드에 바로 적용하세요.</p>
+            </div>
+            <div class="template-sequence-nav ${options.sequence?.length ? '' : 'is-hidden'}">
+              <button type="button" class="tool-btn" id="splitPrevSourceBtn">이전 원본</button>
+              <span class="template-sequence-counter" id="splitSourceCounter"></span>
+              <button type="button" class="tool-btn" id="splitNextSourceBtn">다음 원본</button>
+            </div>
           </div>
           <div class="template-manual-controls">
             <input type="text" class="gen-input template-syllable-input" id="splitSyllableInput" maxlength="1" placeholder="한" value="${initialChar}" />
-            <label class="gen-btn template-upload-btn" for="splitSingleFileInput">Replace Image</label>
+            <label class="gen-btn template-upload-btn" for="splitSingleFileInput">이미지 교체</label>
             <input type="file" id="splitSingleFileInput" accept="image/*" class="template-file-input" />
             <div class="template-edit-tools">
-              <button type="button" class="tool-btn active" id="splitSelectModeBtn">Select</button>
-              <button type="button" class="tool-btn" id="splitEraseModeBtn">Erase</button>
-              <button type="button" class="tool-btn" id="splitDrawModeBtn">Draw</button>
-              <button type="button" class="tool-btn" id="splitAutoAssignBtn">Auto Assign</button>
-              <label class="template-brush-control">Brush <input type="range" id="splitBrushSizeInput" min="6" max="42" value="18" /></label>
+              <button type="button" class="tool-btn active" id="splitSelectModeBtn">선택</button>
+              <button type="button" class="tool-btn" id="splitEraseModeBtn">지우기</button>
+              <button type="button" class="tool-btn" id="splitDrawModeBtn">그리기</button>
+              <button type="button" class="tool-btn" id="splitAutoAssignBtn">자동 지정</button>
+              <label class="template-brush-control">브러시 <input type="range" id="splitBrushSizeInput" min="6" max="42" value="18" /></label>
             </div>
             <div class="template-assignment-tools">
-              <button type="button" class="gen-btn" id="splitAssignActiveBtn" disabled>Assign to Active Target</button>
-              <button type="button" class="tool-btn" id="splitClearSelectionBtn" disabled>Clear Selection</button>
-              <button type="button" class="tool-btn" id="splitClearAssignmentsBtn" disabled>Clear Assignments</button>
+              <button type="button" class="gen-btn" id="splitAssignActiveBtn" disabled>선택한 대상에 지정</button>
+              <button type="button" class="tool-btn" id="splitClearSelectionBtn" disabled>선택 해제</button>
+              <button type="button" class="tool-btn" id="splitClearAssignmentsBtn" disabled>지정 초기화</button>
             </div>
-            <button class="gen-btn" id="splitApplySelectionBtn" disabled>Apply to Glyph Cards</button>
+            <div class="template-apply-tools">
+              <button class="gen-btn" id="splitSavePendingBtn" disabled>저장된 부분에 추가</button>
+              <button class="gen-btn" id="splitApplySelectionBtn" disabled>글자 카드에 적용</button>
+            </div>
           </div>
-          <div class="template-status" id="splitManualStatus">Load or replace the syllable image, then assign its parts.</div>
+          <div class="template-status" id="splitManualStatus">글자 이미지를 불러오거나 교체한 뒤, 각 부분의 적용 대상을 지정하세요.</div>
           <div class="template-manual-layout">
             <canvas class="template-manual-canvas" id="splitManualCanvas" width="520" height="520"></canvas>
             <div class="template-manual-sidebar">
               <div class="template-target-list" id="splitTargetList"></div>
-              <div class="template-selection-summary" id="splitSelectionSummary">No image loaded.</div>
+              <div class="template-selection-summary" id="splitSelectionSummary">불러온 이미지가 없습니다.</div>
             </div>
           </div>
         </div>
@@ -65,6 +75,17 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
     if (event.target === overlay) close();
     app._hideManualContextMenu(state);
   });
+
+  const sequence = Array.isArray(options.sequence) ? options.sequence.filter((slot) => slot?.char && slot?.imageSrc) : [];
+  let currentSequenceIndex = sequence.length
+    ? Math.max(0, Math.min(
+        Number.isInteger(options.sequenceIndex)
+          ? options.sequenceIndex
+          : sequence.findIndex((slot) => slot.char === initialChar),
+        sequence.length - 1
+      ))
+    : -1;
+  if (currentSequenceIndex < 0 && sequence.length) currentSequenceIndex = 0;
 
   const state = {
     char: initialChar,
@@ -84,6 +105,7 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
 
   const syllableInput = document.getElementById('splitSyllableInput');
   const applyBtn = document.getElementById('splitApplySelectionBtn');
+  const savePendingBtn = document.getElementById('splitSavePendingBtn');
   const manualStatus = document.getElementById('splitManualStatus');
   const manualCanvas = document.getElementById('splitManualCanvas');
   const targetList = document.getElementById('splitTargetList');
@@ -96,13 +118,24 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
   const assignActiveBtn = document.getElementById('splitAssignActiveBtn');
   const clearSelectionBtn = document.getElementById('splitClearSelectionBtn');
   const clearAssignmentsBtn = document.getElementById('splitClearAssignmentsBtn');
+  const prevSourceBtn = document.getElementById('splitPrevSourceBtn');
+  const nextSourceBtn = document.getElementById('splitNextSourceBtn');
+  const sourceCounter = document.getElementById('splitSourceCounter');
 
   const render = () => {
     app._renderManualSplitState(manualCanvas, targetList, selectionSummary, state, render);
     applyBtn.disabled = !app._canApplyManualSplit(state);
+    savePendingBtn.disabled = !app._canApplyManualSplit(state);
     assignActiveBtn.disabled = !state.selectedComponentIds?.size || !state.targets.length || state.editMode !== 'select';
     clearSelectionBtn.disabled = !state.selectedComponentIds?.size;
     clearAssignmentsBtn.disabled = !state.assignments?.size;
+    if (sourceCounter) {
+      sourceCounter.textContent = sequence.length && currentSequenceIndex >= 0
+        ? `${currentSequenceIndex + 1}/${sequence.length}`
+        : '';
+    }
+    if (prevSourceBtn) prevSourceBtn.disabled = !sequence.length || currentSequenceIndex <= 0;
+    if (nextSourceBtn) nextSourceBtn.disabled = !sequence.length || currentSequenceIndex >= sequence.length - 1;
   };
 
   const loadImageIntoState = async (src) => {
@@ -113,11 +146,36 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
     state.editImageData = imageDataFromExtractedMask(state.extracted);
     state.assignments = new Map();
     state.selectedComponentIds = new Set();
-    manualStatus.textContent = `Detected ${state.extracted.components.length} stroke groups. Select groups, assign targets, then apply them to glyph cards.`;
+    manualStatus.textContent = `획 그룹 ${state.extracted.components.length}개를 찾았습니다. 그룹을 선택하고 대상을 지정한 뒤 글자 카드에 적용하세요.`;
     render();
   };
 
+  const loadSequenceSlot = async (index) => {
+    if (!sequence.length || index < 0 || index >= sequence.length) return;
+    const slot = sequence[index];
+    currentSequenceIndex = index;
+    state.char = slot.char;
+    state.targets = slot.targets?.length ? slot.targets : app._getTargetsForManualSplit(slot.char);
+    state.imageSrc = slot.imageSrc;
+    state.activeTargetIndex = 0;
+    state.assignments = new Map();
+    state.selectedComponentIds = new Set();
+    state.contextMenuEl = null;
+    state.editMode = 'select';
+    syllableInput.value = slot.char;
+    manualStatus.textContent = `${slot.char} 원본을 불러오는 중...`;
+    try {
+      await loadImageIntoState(slot.imageSrc);
+      manualStatus.textContent = `${slot.char} 원본을 불러왔습니다. 필요한 획을 선택해 저장하거나 적용하세요.`;
+    } catch (error) {
+      state.extracted = null;
+      manualStatus.textContent = `${slot.char} 원본을 불러오지 못했습니다: ${error.message}`;
+      render();
+    }
+  };
+
   syllableInput.addEventListener('input', async () => {
+    currentSequenceIndex = -1;
     state.char = syllableInput.value.trim();
     state.targets = app._getTargetsForManualSplit(state.char);
     state.activeTargetIndex = 0;
@@ -132,7 +190,7 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
     if (state.imageSrc) {
       await loadImageIntoState(state.imageSrc);
     } else {
-      manualStatus.textContent = 'Replace the image or pick one imported glyph card from the browser.';
+      manualStatus.textContent = '이미지를 교체하거나 글자 보기에서 가져온 글자 카드를 선택하세요.';
       render();
     }
   });
@@ -187,7 +245,7 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
   drawModeBtn?.addEventListener('click', () => setEditMode('draw'));
   autoAssignBtn?.addEventListener('click', () => {
     const result = app._autoAssignManualSplitTargets(state);
-    manualStatus.textContent = `Auto assigned ${result.assigned} group${result.assigned === 1 ? '' : 's'}. ${result.needsReview} group${result.needsReview === 1 ? '' : 's'} need review.`;
+    manualStatus.textContent = `그룹 ${result.assigned}개를 자동 지정했습니다. 그룹 ${result.needsReview}개는 확인이 필요합니다.`;
     setEditMode('select');
     render();
   });
@@ -195,29 +253,37 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
     if (!state.selectedComponentIds?.size || !state.targets.length) return;
     const count = state.selectedComponentIds.size;
     app._assignSelectedComponentsToTarget(state, state.activeTargetIndex);
-    manualStatus.textContent = `Assigned ${count} selected group${count === 1 ? '' : 's'} to the active target.`;
+    manualStatus.textContent = `선택한 그룹 ${count}개를 현재 대상에 지정했습니다.`;
     render();
   });
   clearSelectionBtn?.addEventListener('click', () => {
     state.selectedComponentIds = new Set();
-    manualStatus.textContent = 'Selection cleared.';
+    manualStatus.textContent = '선택을 해제했습니다.';
     render();
   });
   clearAssignmentsBtn?.addEventListener('click', () => {
     state.assignments = new Map();
     state.selectedComponentIds = new Set();
-    manualStatus.textContent = 'Assignments cleared.';
+    manualStatus.textContent = '지정을 초기화했습니다.';
     render();
   });
   brushSizeInput?.addEventListener('input', () => {
     state.brushSize = Number(brushSizeInput.value) || 18;
+  });
+  prevSourceBtn?.addEventListener('click', async () => {
+    if (currentSequenceIndex <= 0) return;
+    await loadSequenceSlot(currentSequenceIndex - 1);
+  });
+  nextSourceBtn?.addEventListener('click', async () => {
+    if (currentSequenceIndex >= sequence.length - 1) return;
+    await loadSequenceSlot(currentSequenceIndex + 1);
   });
 
   document.getElementById('splitSingleFileInput').addEventListener('change', async (event) => {
     const [file] = event.target.files ?? [];
     if (!file) return;
     if (!app._getTargetsForManualSplit(state.char).length) {
-      manualStatus.textContent = 'Enter the syllable first so Fontto knows where to save the parts.';
+      manualStatus.textContent = '부분을 어디에 저장할지 알 수 있도록 글자를 먼저 입력하세요.';
       return;
     }
     const src = await readFileAsDataUrl(file);
@@ -227,16 +293,26 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
   applyBtn.addEventListener('click', () => {
     const result = app._applyManualSplitAssignments(state);
     manualStatus.textContent = result.applied > 0
-      ? `Applied ${result.applied} part${result.applied === 1 ? '' : 's'} to the matching glyph card${result.applied === 1 ? '' : 's'}.`
-      : `Applied 0 parts: ${result.reason || 'select a stroke group and target first.'}`;
+      ? `일치하는 글자 카드에 부분 ${result.applied}개를 적용했습니다.`
+      : `적용된 부분이 없습니다: ${result.reason || '획 그룹과 적용 대상을 먼저 선택하세요.'}`;
     render();
   });
 
-  if (state.char && state.imageSrc && state.targets.length) {
+  savePendingBtn.addEventListener('click', () => {
+    const result = app._saveManualSplitAssignmentsToPending(state);
+    manualStatus.textContent = result.saved > 0
+      ? `부분 ${result.saved}개를 저장된 부분에 추가했습니다.`
+      : `저장된 부분이 없습니다: ${result.reason || '획 그룹과 적용 대상을 먼저 선택하세요.'}`;
+    render();
+  });
+
+  if (sequence.length) {
+    await loadSequenceSlot(currentSequenceIndex);
+  } else if (state.char && state.imageSrc && state.targets.length) {
     try {
       await loadImageIntoState(state.imageSrc);
     } catch (error) {
-      manualStatus.textContent = `Failed to load imported image: ${error.message}`;
+      manualStatus.textContent = `가져온 이미지를 불러오지 못했습니다: ${error.message}`;
     }
   } else {
     render();
@@ -263,7 +339,7 @@ function extractManualSplitImage(image) {
   const imageData = ctx.getImageData(0, 0, size, size);
   const extracted = extractRasterComponents(imageData);
   if (extracted.components.length === 0) {
-    throw new Error('No stroke groups were detected in the uploaded image.');
+    throw new Error('업로드한 이미지에서 획 그룹을 찾지 못했습니다.');
   }
 
   return extracted;

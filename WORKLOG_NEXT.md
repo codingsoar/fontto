@@ -54,14 +54,25 @@
 
 ## Open issues to check next
 
-1. Confirm `Edit Imported Syllable` works for multiple imported cards, not just a few samples.
-2. Verify right-click assignment UX is understandable:
+1. Test the current template workflow end to end in the browser:
+   - download template
+   - upload filled template
+   - open multiple imported cards
+   - select stroke groups
+   - assign to targets
+   - `Apply to Glyph Cards`
+   - confirm input cards and glyph browser update immediately
+2. Verify direct apply UX is understandable:
    - selected group highlight
    - target button labels
    - assigned count updates
-3. Check whether imported syllable cards should support:
-   - direct "apply to another glyph" action
-   - batch reuse of the same selected part across multiple glyphs
+   - completed target status
+3. Test optional ASCII input:
+   - uppercase A-Z
+   - lowercase a-z
+   - digits 0-9
+   - symbols `. , ! ? : ; ' " ( ) [ ] - / @ # & *`
+   - confirm generated TTF includes directly drawn ASCII where provided
 4. Review remaining broken Korean strings in repo comments or old UI text.
 5. Consider showing the raw imported image in the split modal if detection fails again.
 
@@ -73,11 +84,17 @@
 
 ## Suggested next priority
 
-1. Improve split modal usability.
-2. Add explicit action for "select this part and apply it to other glyphs".
-3. Add better visual confirmation after assignment/save.
+1. Manually test the current state before adding monetization.
+2. Add better visual confirmation after direct assignment/save.
+3. Start MVP monetization flow after testing:
+   - free creation and preview
+   - paid one-font TTF download
+   - mock paid/unpaid state first
+   - later connect Toss Payments or Stripe through a small verification API
+   - initial price test: 9,900 KRW for one completed font download
 
 ## Validation status
 
 - Last successful checks: `npm run build`, `git diff --check`
 - Dev server: `http://127.0.0.1:5174/` (5173 was already in use)
+- Current git state after last push: clean on `main...origin/main`

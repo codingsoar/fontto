@@ -1,15 +1,21 @@
 import { CATEGORIES, buildGuideMeta } from '../ui/jamo-grid.js';
 import { compose, decompose } from './hangul.js';
 
-export const TEMPLATE_COLUMNS = 6;
-const TEMPLATE_CELL_WIDTH = 168;
-const TEMPLATE_CELL_HEIGHT = 212;
-const TEMPLATE_GAP = 16;
-const TEMPLATE_PADDING = 24;
-const TEMPLATE_HEADER_HEIGHT = 44;
-const TEMPLATE_FOOTER_HEIGHT = 34;
-const TEMPLATE_DRAW_PADDING = 10;
-const TEMPLATE_IMPORT_INSET = 8;
+export const TEMPLATE_COLUMNS = 4;
+export const TEMPLATE_ROWS_PER_PAGE = 6;
+export const TEMPLATE_SLOTS_PER_PAGE = TEMPLATE_COLUMNS * TEMPLATE_ROWS_PER_PAGE;
+export const TEMPLATE_PAGE_WIDTH = 2480;
+export const TEMPLATE_PAGE_HEIGHT = 3508;
+const TEMPLATE_CELL_WIDTH = 564;
+const TEMPLATE_CELL_HEIGHT = 476;
+const TEMPLATE_GAP = 32;
+const TEMPLATE_PADDING_X = 80;
+const TEMPLATE_PADDING_Y = 144;
+const TEMPLATE_HEADER_HEIGHT = 96;
+const TEMPLATE_FOOTER_HEIGHT = 68;
+const TEMPLATE_DRAW_PADDING = 20;
+const TEMPLATE_IMPORT_INSET = 16;
+const TEMPLATE_FONT_FAMILY = 'NanumGothic ExtraBold, Nanum Gothic, NanumGothic, sans-serif';
 
 export function getTemplateSlots() {
   const slots = [];
@@ -36,10 +42,16 @@ export function getTemplateSlots() {
   return slots;
 }
 
-export function getTemplateMetrics(slotCount) {
-  const rows = Math.ceil(slotCount / TEMPLATE_COLUMNS);
-  const width = TEMPLATE_PADDING * 2 + TEMPLATE_COLUMNS * TEMPLATE_CELL_WIDTH + (TEMPLATE_COLUMNS - 1) * TEMPLATE_GAP;
-  const height = TEMPLATE_PADDING * 2 + rows * TEMPLATE_CELL_HEIGHT + (rows - 1) * TEMPLATE_GAP + 18;
+export function getTemplatePages(slots) {
+  const pages = [];
+  for (let index = 0; index < slots.length; index += TEMPLATE_SLOTS_PER_PAGE) {
+    pages.push(slots.slice(index, index + TEMPLATE_SLOTS_PER_PAGE));
+  }
+  return pages;
+}
+
+export function getTemplateMetrics(slotCount = TEMPLATE_SLOTS_PER_PAGE) {
+  const rows = Math.min(Math.ceil(slotCount / TEMPLATE_COLUMNS), TEMPLATE_ROWS_PER_PAGE);
 
   return {
     rows,
@@ -47,34 +59,36 @@ export function getTemplateMetrics(slotCount) {
     cellWidth: TEMPLATE_CELL_WIDTH,
     cellHeight: TEMPLATE_CELL_HEIGHT,
     gap: TEMPLATE_GAP,
-    padding: TEMPLATE_PADDING,
-    width,
-    height,
+    padding: TEMPLATE_PADDING_X,
+    paddingX: TEMPLATE_PADDING_X,
+    paddingY: TEMPLATE_PADDING_Y,
+    width: TEMPLATE_PAGE_WIDTH,
+    height: TEMPLATE_PAGE_HEIGHT,
     headerHeight: TEMPLATE_HEADER_HEIGHT,
     footerHeight: TEMPLATE_FOOTER_HEIGHT,
     drawPadding: TEMPLATE_DRAW_PADDING,
   };
 }
 
-export function buildTemplateSvg(slots) {
+export function buildTemplateSvg(slots, pageIndex = 0, totalPages = 1) {
   const metrics = getTemplateMetrics(slots.length);
   const cells = slots.map((slot, index) => {
     const rect = getTemplateCellRect(index, metrics);
     const drawRect = getTemplateDrawRect(rect, metrics);
-    const headerY = rect.y + 18;
+    const headerY = rect.y + 36;
     const title = `${slot.label}  ${slot.example}`;
-    const affectsText = `Affects ${slot.previewChars.join('  ')}`;
+    const affectsText = `적용 예 ${slot.previewChars.join('  ')}`;
     const categoryText = compactCategoryLabel(slot.categoryLabel);
     const guideCenterY = drawRect.y + drawRect.h / 2;
 
     return `
       <g>
-        <rect x="${rect.x}" y="${rect.y}" width="${rect.w}" height="${rect.h}" rx="12" fill="#ffffff" stroke="#d6d9e4" stroke-width="2" />
-        <rect x="${drawRect.x}" y="${drawRect.y}" width="${drawRect.w}" height="${drawRect.h}" rx="8" fill="#fafbff" stroke="#c6cbdb" stroke-dasharray="6 6" />
-        <text x="${rect.x + 12}" y="${headerY}" font-family="Noto Sans KR, sans-serif" font-size="15" font-weight="700" fill="#22283a">${escapeXml(title)}</text>
-        <text x="${rect.x + 12}" y="${headerY + 18}" font-family="Noto Sans KR, sans-serif" font-size="11" fill="#667089">${escapeXml(categoryText)} - ${escapeXml(slot.guideLabel)}</text>
-        <text x="${drawRect.x + drawRect.w / 2}" y="${guideCenterY}" text-anchor="middle" dy="0.35em" font-family="Noto Sans KR, sans-serif" font-size="88" font-weight="700" fill="#e6eaf5">${escapeXml(slot.example)}</text>
-        <text x="${rect.x + 12}" y="${rect.y + rect.h - 12}" font-family="Noto Sans KR, sans-serif" font-size="11" fill="#5a6278">${escapeXml(affectsText)}</text>
+        <rect x="${rect.x}" y="${rect.y}" width="${rect.w}" height="${rect.h}" rx="24" fill="#ffffff" stroke="#d6d9e4" stroke-width="4" />
+        <rect x="${drawRect.x}" y="${drawRect.y}" width="${drawRect.w}" height="${drawRect.h}" rx="16" fill="#fafbff" stroke="#c6cbdb" stroke-dasharray="12 12" stroke-width="2" />
+        <text x="${rect.x + 24}" y="${headerY}" font-family="${TEMPLATE_FONT_FAMILY}" font-size="30" font-weight="800" fill="#22283a">${escapeXml(title)}</text>
+        <text x="${rect.x + 24}" y="${headerY + 36}" font-family="${TEMPLATE_FONT_FAMILY}" font-size="22" font-weight="800" fill="#667089">${escapeXml(categoryText)} - ${escapeXml(slot.guideLabel)}</text>
+        <text x="${drawRect.x + drawRect.w / 2}" y="${guideCenterY}" text-anchor="middle" dy="0.35em" font-family="${TEMPLATE_FONT_FAMILY}" font-size="176" font-weight="800" fill="#e6eaf5">${escapeXml(slot.example)}</text>
+        <text x="${rect.x + 24}" y="${rect.y + rect.h - 24}" font-family="${TEMPLATE_FONT_FAMILY}" font-size="22" font-weight="800" fill="#5a6278">${escapeXml(affectsText)}</text>
       </g>
     `;
   }).join('');
@@ -82,8 +96,9 @@ export function buildTemplateSvg(slots) {
   return `
     <svg xmlns="http://www.w3.org/2000/svg" width="${metrics.width}" height="${metrics.height}" viewBox="0 0 ${metrics.width} ${metrics.height}">
       <rect width="100%" height="100%" fill="#f3f5fb" />
-      <text x="${metrics.padding}" y="18" font-family="Noto Sans KR, sans-serif" font-size="12" fill="#5a6278">
-        Fill only the dashed area. Each box shows the guide glyph to write and example output that will reflect that input.
+      <text x="${metrics.paddingX}" y="68" font-family="${TEMPLATE_FONT_FAMILY}" font-size="36" font-weight="800" fill="#22283a">Fontto 템플릿 ${pageIndex + 1}/${totalPages}</text>
+      <text x="${metrics.paddingX}" y="112" font-family="${TEMPLATE_FONT_FAMILY}" font-size="24" font-weight="800" fill="#5a6278">
+        점선 영역 안에만 써주세요. 각 칸에는 따라 쓸 글자와 이 입력이 반영될 예시 글자가 표시됩니다.
       </text>
       ${cells}
     </svg>
@@ -93,8 +108,8 @@ export function buildTemplateSvg(slots) {
 export function getTemplateCellRect(index, metrics) {
   const col = index % metrics.cols;
   const row = Math.floor(index / metrics.cols);
-  const x = metrics.padding + col * (metrics.cellWidth + metrics.gap);
-  const y = metrics.padding + row * (metrics.cellHeight + metrics.gap);
+  const x = metrics.paddingX + col * (metrics.cellWidth + metrics.gap);
+  const y = metrics.paddingY + row * (metrics.cellHeight + metrics.gap);
 
   return {
     x,
@@ -612,16 +627,15 @@ function buildPreviewChars(category, index, example) {
 
 function compactCategoryLabel(label) {
   return label
-    .replace('Initial', 'Cho')
-    .replace('Medial', 'Jung')
-    .replace('Final', 'Jong')
-    .replace('(vertical vowel)', 'vertical')
-    .replace('(horizontal vowel)', 'horizontal')
-    .replace('(vertical vowel + final)', 'vertical + final')
-    .replace('(horizontal vowel + final)', 'horizontal + final')
-    .replace('(no final)', 'no final')
-    .replace('(with final)', 'with final')
-    .replace('(single)', 'single')
-    .replace('(cluster)', 'cluster')
-    .replace('(after horizontal medial)', 'after horizontal');
+    .replace('초성', '초성')
+    .replace('중성', '중성')
+    .replace('종성', '종성')
+    .replace('세로 모음', '세로')
+    .replace('가로 모음', '가로')
+    .replace('복합 모음', '복합')
+    .replace('받침 없음', '받침 없음')
+    .replace('받침 있음', '받침 있음')
+    .replace('단일', '단일')
+    .replace('겹받침', '겹받침')
+    .replace('가로 중성 뒤', '가로 뒤');
 }

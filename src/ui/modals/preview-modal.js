@@ -17,7 +17,7 @@ export function showPreviewModal(app) {
   overlay.innerHTML = `
     <div class="modal preview-modal">
       <div class="modal-header">
-        <h2>Preview</h2>
+        <h2>미리보기</h2>
         <button class="modal-close" id="closePreviewModal">x</button>
       </div>
       <div class="modal-body">
@@ -65,11 +65,20 @@ function renderPreviewText(text, container, jamoLib) {
   const canvas = document.createElement('canvas');
   const dpr = window.devicePixelRatio || 1;
   const lines = text.split('\n');
-  const cellSize = 48;
-  const lineHeight = cellSize + 12;
   const maxChars = Math.max(...lines.map(l => l.length), 1);
+  const paddingX = 20;
+  const availableWidth = Math.max((container.clientWidth || 700) - 32, 240);
+  const gap = Math.min(4, Math.max(0, (availableWidth - paddingX * 2) / maxChars * 0.08));
+  const cellSize = Math.max(
+    Math.min(
+      48,
+      (availableWidth - paddingX * 2 - gap * Math.max(maxChars - 1, 0)) / maxChars
+    ),
+    1
+  );
+  const lineHeight = cellSize + 12;
 
-  const w = Math.min(maxChars * (cellSize + 4) + 40, container.clientWidth || 700);
+  const w = Math.ceil(maxChars * cellSize + gap * Math.max(maxChars - 1, 0) + paddingX * 2);
   const h = lines.length * lineHeight + 20;
 
   canvas.width = w * dpr;
@@ -86,7 +95,7 @@ function renderPreviewText(text, container, jamoLib) {
       const char = line[ci];
       if (char === ' ') continue;
 
-      const x = 20 + ci * (cellSize + 4);
+      const x = paddingX + ci * (cellSize + gap);
       const y = 10 + li * lineHeight;
 
       const info = decomposeChar(char);

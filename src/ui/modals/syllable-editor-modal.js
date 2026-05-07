@@ -32,7 +32,7 @@ export function saveOverrides(overrides) {
   try {
     localStorage.setItem(OVERRIDE_STORAGE_KEY, JSON.stringify(overrides));
   } catch (err) {
-    console.warn('Failed to save syllable overrides:', err);
+    console.warn('글자 세부 조정값 저장 실패:', err);
   }
 }
 
@@ -89,7 +89,7 @@ export function applyOverrideToCommands(commands, override) {
 export function showSyllableEditorModal(app, char) {
   const info = decomposeChar(char);
   if (!info) {
-    showToast('Invalid syllable character.', 'warning');
+    showToast('올바른 한글 음절을 입력하세요.', 'warning');
     return;
   }
 
@@ -107,7 +107,7 @@ export function showSyllableEditorModal(app, char) {
   overlay.innerHTML = `
     <div class="modal syllable-editor-modal">
       <div class="modal-header">
-        <h2>Fine-tune ${char}</h2>
+        <h2>${char} 세부 조정</h2>
         <button class="modal-close" id="closeSyllableEditorModal">x</button>
       </div>
       <div class="modal-body syllable-editor-body">
@@ -115,12 +115,12 @@ export function showSyllableEditorModal(app, char) {
           <canvas id="syllableEditorCanvas" width="300" height="300"></canvas>
         </div>
         <div class="syllable-editor-controls">
-          ${buildPartControls('Initial (cho)', 'cho', current.cho)}
-          ${buildPartControls('Medial (jung)', 'jung', current.jung)}
-          ${info.jong > 0 ? buildPartControls('Final (jong)', 'jong', current.jong) : ''}
+          ${buildPartControls('초성', 'cho', current.cho)}
+          ${buildPartControls('중성', 'jung', current.jung)}
+          ${info.jong > 0 ? buildPartControls('종성', 'jong', current.jong) : ''}
           <div class="syllable-editor-actions">
-            <button class="gen-btn" id="syllableEditorResetBtn">Reset</button>
-            <button class="gen-btn download-btn" id="syllableEditorSaveBtn">Save Override</button>
+            <button class="gen-btn" id="syllableEditorResetBtn">초기화</button>
+            <button class="gen-btn download-btn" id="syllableEditorSaveBtn">조정값 저장</button>
           </div>
         </div>
       </div>
@@ -179,7 +179,7 @@ export function showSyllableEditorModal(app, char) {
   document.getElementById('syllableEditorSaveBtn').addEventListener('click', () => {
     overrides[char] = { ...current };
     saveOverrides(overrides);
-    showToast(`Saved override for ${char}`, 'success', 2000);
+    showToast(`${char} 조정값을 저장했습니다.`, 'success', 2000);
     render();
   });
 
@@ -191,10 +191,10 @@ function buildPartControls(label, partKey, values) {
     <div class="syllable-editor-part">
       <h4 class="syllable-editor-part-label">${label}</h4>
       <div class="syllable-editor-sliders">
-        ${buildSlider(partKey, 'dx', 'X offset', values.dx, -200, 200, 1)}
-        ${buildSlider(partKey, 'dy', 'Y offset', values.dy, -200, 200, 1)}
-        ${buildSlider(partKey, 'sx', 'X scale', values.sx, 0.5, 1.5, 0.01)}
-        ${buildSlider(partKey, 'sy', 'Y scale', values.sy, 0.5, 1.5, 0.01)}
+        ${buildSlider(partKey, 'dx', '가로 위치', values.dx, -200, 200, 1)}
+        ${buildSlider(partKey, 'dy', '세로 위치', values.dy, -200, 200, 1)}
+        ${buildSlider(partKey, 'sx', '가로 크기', values.sx, 0.5, 1.5, 0.01)}
+        ${buildSlider(partKey, 'sy', '세로 크기', values.sy, 0.5, 1.5, 0.01)}
       </div>
     </div>
   `;

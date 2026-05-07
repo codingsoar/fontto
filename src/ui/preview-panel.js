@@ -1,4 +1,4 @@
-﻿import { compose, decompose, CHO, JUNG, JONG } from '../core/hangul.js';
+﻿import { compose, decompose, CHO, JUNG, JONG, getVowelCategory } from '../core/hangul.js';
 import { composeSyllable } from '../core/composer.js';
 
 export class PreviewPanel {
@@ -66,15 +66,15 @@ export class PreviewPanel {
       browserSection.className = 'preview-browser';
       browserSection.innerHTML = `
         <div class="preview-browser-toolbar">
-          <span class="preview-browser-title">11172 Glyph Browser</span>
+          <span class="preview-browser-title">11,172자 글자 보기</span>
           <div class="preview-browser-nav">
-            <button type="button" class="tool-btn preview-browser-btn" data-nav="prev">Prev</button>
+            <button type="button" class="tool-btn preview-browser-btn" data-nav="prev">이전</button>
             <span class="preview-browser-page"></span>
-            <button type="button" class="tool-btn preview-browser-btn" data-nav="next">Next</button>
+            <button type="button" class="tool-btn preview-browser-btn" data-nav="next">다음</button>
           </div>
           <div class="preview-browser-search">
             <input type="text" class="preview-browser-input" maxlength="1" placeholder="한" />
-            <button type="button" class="tool-btn preview-browser-btn preview-browser-find">Find</button>
+            <button type="button" class="tool-btn preview-browser-btn preview-browser-find">찾기</button>
           </div>
         </div>
         <div class="preview-browser-grid"></div>
@@ -220,12 +220,18 @@ export class PreviewPanel {
     pageChars.forEach((char) => {
       const imported = this.syllableImports?.[char];
       const commands = this._getComposedCommands(char);
+      const hasComposedGlyph = this._hasCompleteComposedGlyph(char);
       const button = document.createElement('button');
       button.type = 'button';
-      button.className = `preview-browser-card ${char === this.browserSelectedChar ? 'active' : ''} ${imported ? 'has-import' : ''}`;
+      button.className = [
+        'preview-browser-card',
+        char === this.browserSelectedChar ? 'active' : '',
+        imported ? 'has-import' : '',
+        hasComposedGlyph ? 'has-composed' : '',
+      ].filter(Boolean).join(' ');
       button.title = char;
       let visualNode;
-      if (commands.length > 0) {
+      if (hasComposedGlyph && commands.length > 0) {
         const canvas = document.createElement('canvas');
         const size = 48;
         const dpr = window.devicePixelRatio || 1;
@@ -241,7 +247,7 @@ export class PreviewPanel {
       } else if (imported?.imageSrc) {
         const image = document.createElement('img');
         image.className = 'preview-browser-import-image';
-        image.alt = `${char} imported source`;
+        image.alt = `${char} 가져온 원본`;
         image.src = imported.imageSrc;
         visualNode = image;
       } else {
@@ -264,10 +270,10 @@ export class PreviewPanel {
       label.textContent = char;
 
       button.appendChild(visualNode);
-      if (imported?.imageSrc) {
+      if (imported?.imageSrc || hasComposedGlyph) {
         const badge = document.createElement('span');
         badge.className = 'preview-browser-badge';
-        badge.textContent = 'Imported';
+        badge.textContent = hasComposedGlyph ? '완성' : '가져옴';
         button.appendChild(badge);
       }
       button.appendChild(label);
@@ -298,13 +304,21 @@ export class PreviewPanel {
     const text = this.sampleText;
     if (!text) return;
 
-    const cellSize = Math.min(60, (this.pW - 40) / Math.max(text.length, 1));
-    const startX = 20;
+    const paddingX = 20;
+    const gap = Math.min(4, Math.max(0, (this.pW - paddingX * 2) / Math.max(text.length, 1) * 0.08));
+    const cellSize = Math.max(
+      Math.min(
+        60,
+        (this.pW - paddingX * 2 - gap * Math.max(text.length - 1, 0)) / Math.max(text.length, 1)
+      ),
+      1
+    );
+    const startX = paddingX;
     const startY = (this.pH - cellSize) / 2;
 
     for (let i = 0; i < text.length; i++) {
       const char = text[i];
-      const x = startX + i * (cellSize + 4);
+      const x = startX + i * (cellSize + gap);
 
       if (char === ' ') continue;
 
@@ -342,6 +356,34 @@ export class PreviewPanel {
     return info
       ? composeSyllable(info.cho, info.jung, info.jong, this.jamoLib)
       : [];
+  }
+
+  _getRequiredKeysForChar(char) {
+    const info = decompose(char);
+    if (!info) return [];
+
+    const vowelCategory = getVowelCategory(info.jung);
+    const dirSuffix = vowelCategory === 'vertical'
+      ? 'v'
+      : vowelCategory === 'horizontal'
+        ? 'h'
+        : 'm';
+    const finalSuffix = info.jong > 0 ? '_wf' : '';
+    const keys = [
+      `cho_${dirSuffix}${finalSuffix}_${CHO[info.cho]}`,
+      `jung_${info.jong > 0 ? 'wb' : 'nb'}_${JUNG[info.jung]}`,
+    ];
+
+    if (info.jong > 0) {
+      keys.push(`jong_${dirSuffix}_${JONG[info.jong]}`);
+    }
+
+    return keys;
+  }
+
+  _hasCompleteComposedGlyph(char) {
+    const requiredKeys = this._getRequiredKeysForChar(char);
+    return requiredKeys.length > 0 && requiredKeys.every((key) => this.jamoLib?.[key]?.length);
   }
 
   _drawImportedPreview(ctx, char, x, y, size) {

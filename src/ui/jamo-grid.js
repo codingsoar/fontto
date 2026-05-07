@@ -40,49 +40,49 @@ const ASCII_SYMBOLS = ['.', ',', '!', '?', ':', ';', "'", '"', '(', ')', '[', ']
 export const CATEGORIES = [
   {
     id: 'cho_v',
-    label: 'Initial (Vertical Vowel)',
+    label: '초성 (세로 모음)',
     items: CHO,
     examples: choExamples(0), // ㅏ
     guideType: 'cho',
   },
   {
     id: 'cho_v_wf',
-    label: 'Initial (Vertical + Final)',
+    label: '초성 (세로 모음 + 받침)',
     items: CHO,
     examples: choExamples(0, 1), // 각
     guideType: 'cho',
   },
   {
     id: 'cho_h',
-    label: 'Initial (Horizontal Vowel)',
+    label: '초성 (가로 모음)',
     items: CHO,
     examples: choExamples(18), // ㅡ
     guideType: 'cho',
   },
   {
     id: 'cho_h_wf',
-    label: 'Initial (Horizontal + Final)',
+    label: '초성 (가로 모음 + 받침)',
     items: CHO,
     examples: choExamples(18, 1), // 극
     guideType: 'cho',
   },
   {
     id: 'cho_m',
-    label: 'Initial (Complex Vowel)',
+    label: '초성 (복합 모음)',
     items: CHO,
     examples: choExamples(9), // ㅘ
     guideType: 'cho',
   },
   {
     id: 'cho_m_wf',
-    label: 'Initial (Complex + Final)',
+    label: '초성 (복합 모음 + 받침)',
     items: CHO,
     examples: choExamples(9, 1), // 꽉
     guideType: 'cho',
   },
   {
     id: 'jung_nb',
-    label: 'Medial (No Final)',
+    label: '중성 (받침 없음)',
     items: JUNG,
     examples: jungExamples(0),
     guideType: 'jung',
@@ -90,35 +90,35 @@ export const CATEGORIES = [
   },
   {
     id: 'jung_wb',
-    label: 'Medial (With Final)',
+    label: '중성 (받침 있음)',
     items: JUNG,
     examples: jungExamples(1), // ㄱ 받침
     guideType: 'jung',
   },
   {
     id: 'jong_v',
-    label: 'Final (Vertical Vowel)',
+    label: '종성 (세로 모음)',
     items: JONG.slice(1),
     examples: jongExamples(0), // ㅏ
     guideType: 'jong',
   },
   {
     id: 'jong_h',
-    label: 'Final (Horizontal Vowel)',
+    label: '종성 (가로 모음)',
     items: JONG.slice(1),
     examples: jongExamples(18), // ㅡ
     guideType: 'jong',
   },
   {
     id: 'jong_m',
-    label: 'Final (Complex Vowel)',
+    label: '종성 (복합 모음)',
     items: JONG.slice(1),
     examples: jongExamples(9), // ㅘ
     guideType: 'jong',
   },
   {
     id: 'ascii_upper',
-    label: 'Uppercase (A-Z)',
+    label: '영문 대문자 (A-Z)',
     items: ASCII_UPPER,
     examples: ASCII_UPPER,
     guideType: 'ascii',
@@ -126,7 +126,7 @@ export const CATEGORIES = [
   },
   {
     id: 'ascii_lower',
-    label: 'Lowercase (a-z)',
+    label: '영문 소문자 (a-z)',
     items: ASCII_LOWER,
     examples: ASCII_LOWER,
     guideType: 'ascii',
@@ -134,7 +134,7 @@ export const CATEGORIES = [
   },
   {
     id: 'ascii_digit',
-    label: 'Digits (0-9)',
+    label: '숫자 (0-9)',
     items: ASCII_DIGITS,
     examples: ASCII_DIGITS,
     guideType: 'ascii',
@@ -142,7 +142,7 @@ export const CATEGORIES = [
   },
   {
     id: 'ascii_symbol',
-    label: 'Symbols',
+    label: '특수문자',
     items: ASCII_SYMBOLS,
     examples: ASCII_SYMBOLS,
     guideType: 'ascii',
@@ -263,7 +263,7 @@ export function buildGuideMeta(categoryId, jamo, example) {
   switch (category?.guideType) {
     case 'cho':
       guide.targetIndices = [0];
-      guide.label = `Target initial ${jamo}`;
+      guide.label = `초성 ${jamo} 쓰기`;
       guide.targetRegion = canvasLayout?.cho ?? (categoryId.includes('_h') || categoryId.includes('_m')
         ? { x: 0.14, y: 0.50, w: 0.72, h: 0.38 }
         : { x: 0.08, y: 0.11, w: 0.42, h: 0.79 });
@@ -284,7 +284,7 @@ export function buildGuideMeta(categoryId, jamo, example) {
       return guide;
     case 'jung':
       guide.targetIndices = [1];
-      guide.label = `Target medial ${jamo}`;
+      guide.label = `중성 ${jamo} 쓰기`;
       guide.targetRegion = categoryId === 'jung_nb'
         ? (isHorizontal
             ? { x: 0.16, y: 0.12, w: 0.68, h: 0.24 }
@@ -311,7 +311,7 @@ export function buildGuideMeta(categoryId, jamo, example) {
       return guide;
     case 'jong':
       guide.targetIndices = [sequence.length - 1];
-      guide.label = `Target final ${jamo}`;
+      guide.label = `종성 ${jamo} 쓰기`;
       guide.targetRegion = pinFinalRegionToMidline(canvasLayout?.jong) ?? { x: 0.15, y: 0.5, w: 0.68, h: 0.32 };
       guide.storageKeys = [`${categoryId}_${jamo}`];
       guide.qualityProfile = createQualityProfile({
@@ -324,7 +324,7 @@ export function buildGuideMeta(categoryId, jamo, example) {
       return guide;
     case 'ascii':
       guide.targetIndices = [0];
-      guide.label = `Draw ${jamo}`;
+      guide.label = `${jamo} 쓰기`;
       guide.targetRegion = { x: 0.1, y: 0.1, w: 0.8, h: 0.8 };
       guide.storageKeys = [`${categoryId}_${jamo}`, `ascii_${jamo}`];
       guide.qualityProfile = createQualityProfile({
@@ -378,12 +378,12 @@ export class JamoGrid {
     const quickFind = document.createElement('div');
     quickFind.className = 'jamo-quick-find';
     quickFind.innerHTML = `
-      <div class="jamo-quick-find-label">Find syllable</div>
+      <div class="jamo-quick-find-label">글자 찾기</div>
       <div class="jamo-quick-find-row">
         <input type="text" class="jamo-quick-find-input" maxlength="1" placeholder="한" />
-        <button type="button" class="tool-btn jamo-quick-find-btn">Go</button>
+        <button type="button" class="tool-btn jamo-quick-find-btn">이동</button>
       </div>
-      <p class="jamo-quick-find-help">Enter one Hangul syllable to jump to the related jamo task.</p>
+      <p class="jamo-quick-find-help">한글 음절 한 글자를 입력하면 관련 입력 항목으로 이동합니다.</p>
     `;
 
     const gridArea = document.createElement('div');

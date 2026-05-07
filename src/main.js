@@ -11,25 +11,41 @@ import { JamoGrid, CATEGORIES, REQUIRED_JAMO_COUNT, buildGuideMeta } from './ui/
 import { PreviewPanel } from './ui/preview-panel.js';
 import { Toolbar } from './ui/toolbar.js';
 import { deriveAll } from './core/jamo-derive.js';
-import { extractRasterComponents, selectedComponentsToCommands, selectedComponentsToPositionedCommands, selectedComponentsToStrokes } from './core/template-import.js';
-import { CHO, JUNG, JONG, compose, getVowelCategory, getChoInfo, getJungInfo, getJongInfo } from './core/hangul.js';
+import {
+  buildTemplateSvg,
+  getTemplatePages,
+  getTemplateSlots,
+  getTemplateMetrics,
+  getTemplateCellRect,
+  getTemplateImportRect,
+  rasterRectToCommands,
+  rasterRectToCleanImageData,
+  extractRasterComponents,
+  selectedComponentsToCommands,
+  selectedComponentsToPositionedCommands,
+  selectedComponentsToStrokes,
+} from './core/template-import.js';
+import { renderPdfFileToCanvases } from './core/pdf-renderer.js';
+import { buildTemplatePdfBytes } from './core/template-pdf.js';
+import { CHO, JUNG, JONG, compose, getVowelCategory, getJongInfo } from './core/hangul.js';
 import { loadState, saveState } from './core/storage.js';
 import { decomposeChar, composeSyllableFromLib, drawGlyphOnCtx, drawPathCommands, createGlyphCanvas, createPartPreviewCanvas } from './core/glyph-utils.js';
 import { showToast } from './ui/toast.js';
 import { showPreviewModal } from './ui/modals/preview-modal.js';
 import { showGenerateModal } from './ui/modals/generate-modal.js';
 import { showReviewModal, getDefaultReviewState } from './ui/modals/review-modal.js';
-import { showTemplateModal } from './ui/modals/template-modal.js';
 import { showSyllableSplitModal } from './ui/modals/syllable-split-modal.js';
 import { showQualityConfirmModal } from './ui/modals/quality-confirm-modal.js';
 import { showSyllableEditorModal } from './ui/modals/syllable-editor-modal.js';
 
 const RECENT_REVIEW_LIMIT = 8;
+const HISTORY_LIMIT = 40;
 
 class FonttoApp {
   jamoDrafts = {};
   guideOverrides = {};
   syllableImports = {};
+  templateImportedSlots = [];
 
   constructor() {
     this.jamoLib = {};
@@ -43,6 +59,10 @@ class FonttoApp {
     this.jamoGrid = null;
     this.previewPanel = null;
     this.toolbar = null;
+    this.templateBrowserPanel = null;
+    this.editorMode = 'draw';
+    this.undoStack = [];
+    this.redoStack = [];
 
     this._init();
   }
@@ -53,6 +73,7 @@ class FonttoApp {
     this.jamoDrafts = saved.jamoDrafts;
     this.guideOverrides = saved.guideOverrides;
     this.syllableImports = saved.syllableImports;
+    this.templateImportedSlots = saved.templateImportedSlots || [];
     this._showLanding();
     window.addEventListener('resize', () => this._handleResize());
   }
@@ -71,55 +92,70 @@ class FonttoApp {
             <span class="logo-icon">Aa</span>
             <h1 class="logo-text">Fontto</h1>
           </div>
-          <p class="landing-subtitle">Turn your handwriting into a Hangul font.</p>
+          <p class="landing-subtitle">내 손글씨를 한글 폰트로 만들어보세요.</p>
           <div class="landing-features">
             <div class="feature-card">
               <span class="feature-icon">62</span>
-              <h3>Draw 62 jamo</h3>
-              <p>Complete the required consonants and vowels, then generate the rest automatically.</p>
+              <h3>자모 62개 쓰기</h3>
+              <p>필수 자음과 모음을 완성하면 나머지 글자는 자동으로 생성됩니다.</p>
             </div>
             <div class="feature-card">
               <span class="feature-icon">AI</span>
-              <h3>Compose syllables</h3>
-              <p>Context-aware composition combines initials, vowels, and finals into full glyphs.</p>
+              <h3>글자 자동 조합</h3>
+              <p>초성, 중성, 종성을 글자 구조에 맞게 조합해 완성형 글자를 만듭니다.</p>
             </div>
             <div class="feature-card">
               <span class="feature-icon">TTF</span>
-              <h3>Download TTF</h3>
-              <p>Review the generated Hangul set and export your font as a TTF file.</p>
+              <h3>TTF 다운로드</h3>
+              <p>생성된 한글 글자 세트를 검수하고 TTF 파일로 내보내세요.</p>
             </div>
           </div>
-          <button class="start-btn" id="startBtn">
-            <span>Start</span>
+          <div class="landing-start-actions">
+          <button class="start-btn" id="startDrawBtn">
+            <span>시작하기</span>
             <span class="btn-arrow">></span>
           </button>
-          <p class="landing-note">Everything runs locally in your browser. No upload required.</p>
+            <button class="start-btn secondary" id="startTemplateBtn">
+              <span>템플릿으로 시작</span>
+              <span class="btn-arrow">></span>
+            </button>
+          </div>
+          <p class="landing-note">모든 작업은 브라우저 안에서만 실행됩니다. 서버 업로드가 필요 없습니다.</p>
         </div>
       </div>
     `;
 
-    document.getElementById('startBtn').addEventListener('click', () => {
-      this._showEditor();
+    document.getElementById('startDrawBtn').addEventListener('click', () => {
+      this._showEditor('draw');
+    });
+    document.getElementById('startTemplateBtn').addEventListener('click', () => {
+      this._showEditor('template');
     });
   }
-  _showEditor() {
+  _showEditor(initialMode = 'draw') {
     this.currentStep = 'editor';
+    this.editorMode = initialMode;
     const app = document.getElementById('app');
     app.innerHTML = `
-      <div class="editor-layout">
+      <div class="editor-layout draw-mode" id="editorLayout">
         <header class="editor-header">
           <div class="header-left">
             <span class="header-logo">Fontto</span>
+            <div class="mode-switch" role="tablist" aria-label="입력 방식">
+              <button class="mode-switch-btn" id="drawModeBtn" type="button">직접 그리기</button>
+              <button class="mode-switch-btn" id="templateModeBtn" type="button">템플릿</button>
+            </div>
           </div>
           <div class="header-center">
-            <span class="current-jamo-label" id="currentJamoLabel">Select a guided task.</span>
+            <span class="current-jamo-label" id="currentJamoLabel">입력할 항목을 선택하세요.</span>
           </div>
           <div class="header-right">
-            <button class="header-btn" id="templateBtn">Template</button>
-            <button class="header-btn is-hidden" id="returnToReviewBtn">Back to Full Set Review</button>
-            <button class="header-btn" id="reviewBtn" disabled>Review Full Set</button>
-            <button class="header-btn" id="previewBtn">Preview</button>
-            <button class="header-btn primary" id="generateBtn" disabled>Generate Font</button>
+            <button class="header-btn" id="undoActionBtn" disabled>이전 작업</button>
+            <button class="header-btn" id="redoActionBtn" disabled>앞으로</button>
+            <button class="header-btn is-hidden" id="returnToReviewBtn">전체 검수로 돌아가기</button>
+            <button class="header-btn" id="reviewBtn" disabled>전체 글자 검수</button>
+            <button class="header-btn" id="previewBtn">미리보기</button>
+            <button class="header-btn primary" id="generateBtn" disabled>폰트 생성</button>
           </div>
         </header>
 
@@ -128,7 +164,7 @@ class FonttoApp {
         <main class="editor-canvas-area">
           <section class="pending-parts-panel" id="pendingPartsPanel"></section>
           <details class="manual-drawing-details">
-            <summary class="template-legacy-summary">Advanced manual drawing</summary>
+            <summary class="template-legacy-summary">고급 직접 그리기</summary>
             <div class="manual-drawing-body">
               <div class="canvas-wrapper">
                 <canvas id="drawingCanvas"></canvas>
@@ -142,6 +178,27 @@ class FonttoApp {
         <aside class="editor-browser-area" id="browserContainer"></aside>
 
         <footer class="editor-footer" id="previewContainer"></footer>
+
+        <main class="template-page is-hidden" id="templatePage">
+          <section class="template-page-header">
+            <div>
+              <h2>템플릿으로 가져오기</h2>
+              <p>PNG 템플릿에 필요한 글자를 한 번에 쓰고 업로드한 뒤, 추출된 글자 카드에서 필요한 획을 선택해 글자 카드에 적용하세요.</p>
+            </div>
+            <div class="template-actions">
+              <button class="gen-btn" id="templatePageDownloadBtn">A4 PDF 템플릿 다운로드</button>
+              <button class="gen-btn" id="templatePageDownloadPngBtn">A4 PNG 템플릿 다운로드</button>
+              <label class="gen-btn template-upload-btn" for="templatePageFileInput">작성한 템플릿 업로드</label>
+              <input type="file" id="templatePageFileInput" accept="image/*,.pdf,application/pdf" multiple class="template-file-input" />
+            </div>
+          </section>
+          <div class="template-status" id="templatePageStatus"></div>
+          <section class="template-import-review template-uploaded-panel" id="templatePageImportReview"></section>
+          <section class="template-center-panel">
+            <section class="pending-parts-panel" id="templatePendingPartsPanel"></section>
+          </section>
+          <aside class="template-browser-area" id="templateBrowserContainer"></aside>
+        </main>
       </div>
     `;
 
@@ -173,7 +230,7 @@ class FonttoApp {
       onLocateChar: (char) => this._jumpToGlyphEdit(char),
       onEditImportedChar: (char) => showSyllableSplitModal(this, char),
       onOpenGlyph: (char, meta) => this._handleGlyphCardOpen(char, meta),
-      onInvalidLocateChar: () => showToast('That glyph is outside the Hangul syllable set.', 'warning', 2600),
+      onInvalidLocateChar: () => showToast('한글 음절 범위에 없는 글자입니다.', 'warning', 2600),
     });
     this.previewPanel.updateJamoLib(deriveAll(this.jamoLib));
     this.previewPanel.updateSyllableImports(this.syllableImports);
@@ -186,10 +243,23 @@ class FonttoApp {
       onLocateChar: (char) => this._jumpToGlyphEdit(char),
       onEditImportedChar: (char) => showSyllableSplitModal(this, char),
       onOpenGlyph: (char, meta) => this._handleGlyphCardOpen(char, meta),
-      onInvalidLocateChar: () => showToast('That glyph is outside the Hangul syllable set.', 'warning', 2600),
+      onInvalidLocateChar: () => showToast('한글 음절 범위에 없는 글자입니다.', 'warning', 2600),
     });
     this.browserPanel.updateJamoLib(deriveAll(this.jamoLib));
     this.browserPanel.updateSyllableImports(this.syllableImports);
+
+    const templateBrowserContainer = document.getElementById('templateBrowserContainer');
+    this.templateBrowserPanel = new PreviewPanel(templateBrowserContainer, {
+      showPreviewInput: false,
+      showPreviewCanvas: false,
+      showBrowser: true,
+      onLocateChar: (char) => this._jumpToGlyphEdit(char),
+      onEditImportedChar: (char) => showSyllableSplitModal(this, char),
+      onOpenGlyph: (char, meta) => this._handleGlyphCardOpen(char, meta),
+      onInvalidLocateChar: () => showToast('한글 음절 범위에 없는 글자입니다.', 'warning', 2600),
+    });
+    this.templateBrowserPanel.updateJamoLib(deriveAll(this.jamoLib));
+    this.templateBrowserPanel.updateSyllableImports(this.syllableImports);
 
     // Initialize toolbar
     const toolbarContainer = document.getElementById('toolbarContainer');
@@ -223,11 +293,20 @@ class FonttoApp {
     });
 
     // Button events
+    document.getElementById('drawModeBtn').addEventListener('click', () => {
+      this._setEditorMode('draw');
+    });
+    document.getElementById('templateModeBtn').addEventListener('click', () => {
+      this._setEditorMode('template');
+    });
+    document.getElementById('undoActionBtn').addEventListener('click', () => {
+      this._undoAppAction();
+    });
+    document.getElementById('redoActionBtn').addEventListener('click', () => {
+      this._redoAppAction();
+    });
     document.getElementById('previewBtn').addEventListener('click', () => {
       showPreviewModal(this);
-    });
-    document.getElementById('templateBtn').addEventListener('click', () => {
-      showTemplateModal(this);
     });
     document.getElementById('reviewBtn').addEventListener('click', () => {
       showReviewModal(this);
@@ -243,66 +322,262 @@ class FonttoApp {
     this._checkGenerateReady();
     this._updateReturnToReviewButton();
     this._renderPendingPartsPanel();
+    this._initTemplatePage();
     this.jamoGrid.goToNext();
+    this._setEditorMode(this.editorMode);
+    this._updateHistoryButtons();
+  }
+
+  _setEditorMode(mode = 'draw') {
+    this.editorMode = mode === 'template' ? 'template' : 'draw';
+    const layout = document.getElementById('editorLayout');
+    const templatePage = document.getElementById('templatePage');
+    const drawButton = document.getElementById('drawModeBtn');
+    const templateButton = document.getElementById('templateModeBtn');
+    const label = document.getElementById('currentJamoLabel');
+
+    layout?.classList.toggle('draw-mode', this.editorMode === 'draw');
+    layout?.classList.toggle('template-mode', this.editorMode === 'template');
+    templatePage?.classList.toggle('is-hidden', this.editorMode !== 'template');
+    drawButton?.classList.toggle('active', this.editorMode === 'draw');
+    templateButton?.classList.toggle('active', this.editorMode === 'template');
+    drawButton?.setAttribute('aria-selected', String(this.editorMode === 'draw'));
+    templateButton?.setAttribute('aria-selected', String(this.editorMode === 'template'));
+
+    if (label && this.editorMode === 'template') {
+      label.textContent = '템플릿을 다운로드하고 작성한 이미지를 업로드하세요.';
+    } else if (label && this.jamoGrid?.getCurrentSelection()) {
+      const sel = this.jamoGrid.getCurrentSelection();
+      const cat = CATEGORIES.find((c) => c.id === sel.categoryId);
+      label.textContent = sel.guide?.label
+        ? `${cat?.label || ''} - ${sel.guide.label} - "${sel.example}"`
+        : `${cat?.label || ''} - "${sel.example}" - ${sel.jamo}`;
+    }
+
+    if (this.editorMode === 'draw') {
+      requestAnimationFrame(() => {
+        this.drawingCanvas?.resize();
+        this.previewPanel?.resize?.();
+        this.browserPanel?.resize?.();
+        this.templateBrowserPanel?.resize?.();
+      });
+    } else {
+      requestAnimationFrame(() => {
+        this.browserPanel?.resize?.();
+        this.templateBrowserPanel?.resize?.();
+      });
+    }
+  }
+
+  _initTemplatePage() {
+    const page = document.getElementById('templatePage');
+    if (!page) return;
+
+    const slots = getTemplateSlots();
+    const pages = getTemplatePages(slots);
+    const statusEl = document.getElementById('templatePageStatus');
+    const importReviewEl = document.getElementById('templatePageImportReview');
+    if (statusEl) statusEl.textContent = `템플릿에는 원본 글자 칸 ${slots.length}개가 필요합니다. A4 ${pages.length}페이지로 나뉩니다.`;
+    if (importReviewEl) {
+      this._renderTemplateImportReview(importReviewEl, this.templateImportedSlots);
+    }
+
+    document.getElementById('templatePageDownloadBtn')?.addEventListener('click', async () => {
+      await this._downloadTemplate(slots);
+    });
+    document.getElementById('templatePageDownloadPngBtn')?.addEventListener('click', async () => {
+      await this._downloadTemplatePng(slots);
+    });
+
+    document.getElementById('templatePageFileInput')?.addEventListener('change', async (event) => {
+      const files = [...(event.target.files ?? [])];
+      if (!files.length || !statusEl) return;
+      statusEl.textContent = '템플릿을 가져오는 중...';
+
+      try {
+        const summary = await this._importTemplateFiles(files, slots);
+        statusEl.textContent = `A4 ${summary.pages}페이지에서 원본 글자 ${summary.imported}개를 가져왔습니다. 빈 칸 ${summary.skipped}개는 건너뛰었습니다.`;
+        this._renderTemplateImportReview(importReviewEl, summary.importedSlots);
+      } catch (error) {
+        console.error('템플릿 가져오기 실패:', error);
+        statusEl.textContent = `가져오기 실패: ${error.message}`;
+      }
+    });
+
+  }
+
+  _captureHistorySnapshot() {
+    return JSON.parse(JSON.stringify({
+      jamoLib: this.jamoLib,
+      jamoDrafts: this.jamoDrafts,
+      guideOverrides: this.guideOverrides,
+      syllableImports: this.syllableImports,
+      templateImportedSlots: this.templateImportedSlots,
+      pendingParts: this.pendingParts,
+      recentEditedKeys: this.recentEditedKeys,
+    }));
+  }
+
+  _pushHistorySnapshot(snapshot, label) {
+    if (!snapshot) return;
+    const current = this._captureHistorySnapshot();
+    if (JSON.stringify(snapshot) === JSON.stringify(current)) return;
+
+    this.undoStack.push({ label, state: snapshot });
+    if (this.undoStack.length > HISTORY_LIMIT) {
+      this.undoStack.shift();
+    }
+    this.redoStack = [];
+    this._updateHistoryButtons();
+  }
+
+  _recordHistory(label) {
+    this.undoStack.push({ label, state: this._captureHistorySnapshot() });
+    if (this.undoStack.length > HISTORY_LIMIT) {
+      this.undoStack.shift();
+    }
+    this.redoStack = [];
+    this._updateHistoryButtons();
+  }
+
+  _restoreHistorySnapshot(snapshot) {
+    this.jamoLib = snapshot.jamoLib || {};
+    this.jamoDrafts = snapshot.jamoDrafts || {};
+    this.guideOverrides = snapshot.guideOverrides || {};
+    this.syllableImports = snapshot.syllableImports || {};
+    this.templateImportedSlots = snapshot.templateImportedSlots || [];
+    this.pendingParts = snapshot.pendingParts || {};
+    this.recentEditedKeys = snapshot.recentEditedKeys || [];
+
+    this._persistState();
+    this._refreshEditorState();
+    this._updateHistoryButtons();
+  }
+
+  _undoAppAction() {
+    if (!this.undoStack.length) return;
+    const entry = this.undoStack.pop();
+    this.redoStack.push({
+      label: entry.label,
+      state: this._captureHistorySnapshot(),
+    });
+    this._restoreHistorySnapshot(entry.state);
+    showToast(`이전 작업으로 돌아갔습니다: ${entry.label}`, 'success', 1800);
+  }
+
+  _redoAppAction() {
+    if (!this.redoStack.length) return;
+    const entry = this.redoStack.pop();
+    this.undoStack.push({
+      label: entry.label,
+      state: this._captureHistorySnapshot(),
+    });
+    this._restoreHistorySnapshot(entry.state);
+    showToast(`작업을 다시 적용했습니다: ${entry.label}`, 'success', 1800);
+  }
+
+  _updateHistoryButtons() {
+    const undoButton = document.getElementById('undoActionBtn');
+    const redoButton = document.getElementById('redoActionBtn');
+    if (undoButton) undoButton.disabled = this.undoStack.length === 0;
+    if (redoButton) redoButton.disabled = this.redoStack.length === 0;
+  }
+
+  _refreshEditorState() {
+    const fullLib = deriveAll(this.jamoLib);
+    this.jamoGrid?.setCompletedMap(this._getCompletedMapFromLib());
+    this.previewPanel?.updateJamoLib(fullLib);
+    this.browserPanel?.updateJamoLib(fullLib);
+    this.templateBrowserPanel?.updateJamoLib(fullLib);
+    this.previewPanel?.updateSyllableImports(this.syllableImports);
+    this.browserPanel?.updateSyllableImports(this.syllableImports);
+    this.templateBrowserPanel?.updateSyllableImports(this.syllableImports);
+    this._renderTemplateImportReview(
+      document.getElementById('templatePageImportReview'),
+      this.templateImportedSlots
+    );
+    this._renderPendingPartsPanel();
+    this._checkGenerateReady();
+
+    const selection = this.jamoGrid?.getCurrentSelection();
+    if (selection && this.drawingCanvas) {
+      const key = `${selection.categoryId}_${selection.jamo}`;
+      const draft = this.jamoDrafts[key];
+      if (draft?.strokes?.length) {
+        this.drawingCanvas.loadStrokes(draft.strokes);
+      } else if (draft?.importedStrokes?.length) {
+        this.drawingCanvas.loadStrokes(draft.importedStrokes);
+      } else {
+        this.drawingCanvas.clear();
+      }
+      this.drawingCanvas.setGuide(this._applyGuideOverride(selection.categoryId, key, selection.guide));
+      this._updateQualityPanel(this.drawingCanvas.getQualityReport());
+    }
   }
 
   _renderPendingPartsPanel() {
-    const panel = document.getElementById('pendingPartsPanel');
-    if (!panel) return;
+    const panels = [
+      document.getElementById('pendingPartsPanel'),
+      document.getElementById('templatePendingPartsPanel'),
+    ].filter(Boolean);
+    if (!panels.length) return;
 
     const entries = Object.entries(this.pendingParts);
-    panel.innerHTML = `
+    panels.forEach((panel, index) => {
+      const suffix = index === 0 ? 'Draw' : 'Template';
+      panel.innerHTML = `
       <div class="pending-parts-header">
         <div>
-          <h2>Saved Parts</h2>
-          <p>Extract strokes from imported syllables or draw a part manually, review it here, then apply it to the glyph browser.</p>
+          <h2>저장된 부분</h2>
+          <p>가져온 글자에서 획을 추출하거나 직접 그린 부분을 여기에서 확인한 뒤, 한 번에 글자 카드에 적용하세요.</p>
         </div>
         <div class="pending-parts-actions">
-          <button class="gen-btn" id="applyPendingPartsBtn" ${entries.length ? '' : 'disabled'}>Apply Saved Parts</button>
-          <button class="tool-btn" id="clearPendingPartsBtn" ${entries.length ? '' : 'disabled'}>Clear</button>
+          <button class="gen-btn" data-pending-action="apply" ${entries.length ? '' : 'disabled'}>저장된 부분 적용</button>
+          <button class="tool-btn" data-pending-action="clear" ${entries.length ? '' : 'disabled'}>비우기</button>
         </div>
       </div>
-      <div class="pending-parts-grid" id="pendingPartsGrid"></div>
+      <div class="pending-parts-grid" id="pendingPartsGrid${suffix}"></div>
     `;
 
-    document.getElementById('applyPendingPartsBtn')?.addEventListener('click', () => {
-      this._applyPendingParts();
-    });
-    document.getElementById('clearPendingPartsBtn')?.addEventListener('click', () => {
-      this._clearAllPendingParts();
-    });
+      panel.querySelector('[data-pending-action="apply"]')?.addEventListener('click', () => {
+        this._applyPendingParts();
+      });
+      panel.querySelector('[data-pending-action="clear"]')?.addEventListener('click', () => {
+        this._clearAllPendingParts();
+      });
 
-    const grid = document.getElementById('pendingPartsGrid');
-    if (!grid) return;
-    if (!entries.length) {
-      grid.innerHTML = '<div class="pending-parts-empty">No saved parts yet. Open an imported syllable or draw in Advanced manual drawing, then save parts here.</div>';
-      return;
-    }
+      const grid = panel.querySelector('.pending-parts-grid');
+      if (!grid) return;
+      if (!entries.length) {
+        grid.innerHTML = '<div class="pending-parts-empty">아직 저장된 부분이 없습니다. 가져온 글자 카드에서 부분을 저장하거나 직접 그린 뒤 여기에 모아두세요.</div>';
+        return;
+      }
 
-    entries.forEach(([key, part]) => {
-      const card = document.createElement('div');
-      card.className = 'pending-part-card';
+      entries.forEach(([key, part]) => {
+        const card = document.createElement('div');
+        card.className = 'pending-part-card';
 
-      const canvas = createPartPreviewCanvas(part.commands, 96);
-      const title = document.createElement('div');
-      title.className = 'pending-part-title';
-      title.textContent = part.selection.guide?.label || `${part.selection.categoryId}_${part.selection.jamo}`;
+        const canvas = createPartPreviewCanvas(part.commands, 96);
+        const title = document.createElement('div');
+        title.className = 'pending-part-title';
+        title.textContent = part.selection.guide?.label || `${part.selection.categoryId}_${part.selection.jamo}`;
 
-      const meta = document.createElement('div');
-      meta.className = 'pending-part-meta';
-      meta.textContent = `${key}${part.sourceChar ? ` from ${part.sourceChar}` : ''}`;
+        const meta = document.createElement('div');
+        meta.className = 'pending-part-meta';
+        meta.textContent = `${key}${part.sourceChar ? ` / 원본 ${part.sourceChar}` : ''}`;
 
-      const remove = document.createElement('button');
-      remove.type = 'button';
-      remove.className = 'tool-btn pending-part-remove';
-      remove.textContent = 'Remove';
-      remove.addEventListener('click', () => this._clearPendingPart(key));
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'tool-btn pending-part-remove';
+        remove.textContent = '삭제';
+        remove.addEventListener('click', () => this._clearPendingPart(key));
 
-      card.appendChild(canvas);
-      card.appendChild(title);
-      card.appendChild(meta);
-      card.appendChild(remove);
-      grid.appendChild(card);
+        card.appendChild(canvas);
+        card.appendChild(title);
+        card.appendChild(meta);
+        card.appendChild(remove);
+        grid.appendChild(card);
+      });
     });
   }
 
@@ -355,7 +630,7 @@ class FonttoApp {
     this.reviewState = { ...this.reviewReturnContext.state };
     this._updateReturnToReviewButton();
     this.jamoGrid.selectItem(primaryTarget.categoryId, primaryTarget.jamo);
-    showToast(`Jumped to ${char} -> ${primaryTarget.label}`, 'success', 2200);
+    showToast(`${char} 관련 항목으로 이동했습니다: ${primaryTarget.label}`, 'success', 2200);
   }
 
   _handleGlyphCardOpen(char, meta = {}) {
@@ -398,17 +673,18 @@ class FonttoApp {
     });
     const strokes = this.drawingCanvas.exportStrokes({ selectedOnly });
     if (!commands.length) {
-      showToast('The drawing could not be converted into a reusable part.', 'warning', 2600);
+      showToast('이 그림은 재사용 가능한 부분으로 변환할 수 없습니다.', 'warning', 2600);
       return false;
     }
 
+    this._recordHistory('부분 저장');
     this._storePendingSelection(sel, commands, strokes, 'manual');
     this._renderPendingPartsPanel();
 
     if (qualityReport.warnings.length > 0) {
       this._showQualityToast(qualityReport.warnings);
     } else if (!options.advance) {
-      showToast('Saved part to the pending panel.', 'success', 2200);
+      showToast('부분을 저장된 부분 패널에 추가했습니다.', 'success', 2200);
     }
 
     if (options.advance) {
@@ -446,12 +722,12 @@ class FonttoApp {
   }
 
   _showCompleteToast() {
-    showToast('All required jamo are saved. You can generate the font now.', 'success');
+    showToast('필수 자모가 모두 저장되었습니다. 이제 폰트를 생성할 수 있습니다.', 'success');
   }
   _showIncompleteToast() {
     const completedCount = this._getCompletedCount();
     const remaining = Math.max(REQUIRED_JAMO_COUNT - completedCount, 0);
-    showToast(`You still have ${remaining} required jamo to complete before review or export.`);
+    showToast(`검수하거나 내보내려면 필수 자모 ${remaining}개를 더 완성해야 합니다.`);
   }
   _showReviewModal() {
     if (!this.jamoGrid?.isAllCompleted()) {
@@ -470,28 +746,28 @@ class FonttoApp {
     overlay.innerHTML = `
       <div class="modal review-modal">
         <div class="modal-header">
-          <h2>Full Set Review</h2>
+          <h2>전체 글자 검수</h2>
           <button class="modal-close" id="closeReviewModal">x</button>
         </div>
         <div class="modal-body review-body">
           <div class="review-toolbar">
             <div class="review-presets" id="reviewPresetGroup">
-              <button class="gen-btn review-preset-btn" data-review-mode="all">All</button>
-              <button class="gen-btn review-preset-btn" data-review-mode="common">Common</button>
-              <button class="gen-btn review-preset-btn" data-review-mode="recent">Recently edited</button>
+              <button class="gen-btn review-preset-btn" data-review-mode="all">전체</button>
+              <button class="gen-btn review-preset-btn" data-review-mode="common">자주 쓰는 글자</button>
+              <button class="gen-btn review-preset-btn" data-review-mode="recent">최근 수정</button>
             </div>
             <div class="review-pagination">
-              <button class="gen-btn" id="reviewPrevBtn">Prev</button>
+              <button class="gen-btn" id="reviewPrevBtn">이전</button>
               <span class="review-page-label" id="reviewPageLabel"></span>
-              <button class="gen-btn" id="reviewNextBtn">Next</button>
+              <button class="gen-btn" id="reviewNextBtn">다음</button>
             </div>
             <div class="review-search">
-              <input type="text" class="gen-input review-search-input" id="reviewSearchInput" maxlength="1" placeholder="Glyph" />
-              <button class="gen-btn" id="reviewSearchBtn">Find</button>
+              <input type="text" class="gen-input review-search-input" id="reviewSearchInput" maxlength="1" placeholder="글자" />
+              <button class="gen-btn" id="reviewSearchBtn">찾기</button>
             </div>
             <div class="review-combo">
-              <input type="text" class="gen-input review-combo-input" id="reviewComboInput" placeholder="Search by jamo sequence" />
-              <button class="gen-btn" id="reviewComboBtn">Filter</button>
+              <input type="text" class="gen-input review-combo-input" id="reviewComboInput" placeholder="자모 조합으로 검색" />
+              <button class="gen-btn" id="reviewComboBtn">필터</button>
             </div>
           </div>
           <div class="review-layout">
@@ -595,8 +871,8 @@ class FonttoApp {
     const pageChars = chars.slice(pageStart, pageStart + state.pageSize);
 
     if (pageChars.length === 0) {
-      pageLabelEl.textContent = '0 / 0 - 0 glyphs';
-      gridEl.innerHTML = '<div class="review-empty">No glyphs match the current filter.</div>';
+      pageLabelEl.textContent = '0 / 0 - 0자';
+      gridEl.innerHTML = '<div class="review-empty">현재 필터와 일치하는 글자가 없습니다.</div>';
       this._renderReviewEmptyState(inspectorEl);
       return;
     }
@@ -605,7 +881,7 @@ class FonttoApp {
       state.selectedChar = pageChars[0];
     }
 
-    pageLabelEl.textContent = `${state.page + 1} / ${totalPages} - ${chars.length} glyphs`;
+    pageLabelEl.textContent = `${state.page + 1} / ${totalPages} - ${chars.length}자`;
     gridEl.innerHTML = '';
 
     pageChars.forEach((char) => {
@@ -616,7 +892,7 @@ class FonttoApp {
       const button = document.createElement('button');
       button.className = `review-glyph-card ${char === state.selectedChar ? 'active' : ''}`;
       button.title = char;
-      button.setAttribute('aria-label', `Review glyph ${char}`);
+      button.setAttribute('aria-label', `${char} 글자 검수`);
       button.addEventListener('click', () => {
         state.selectedChar = char;
         this._renderReviewPage(gridEl, inspectorEl, pageLabelEl, state, jamoLib);
@@ -644,14 +920,14 @@ class FonttoApp {
 
     const title = document.createElement('h3');
     title.className = 'review-inspector-title';
-    title.textContent = `Glyph ${char}`;
+    title.textContent = `글자 ${char}`;
 
     const canvas = createGlyphCanvas(commands, 180);
     canvas.classList.add('review-inspector-canvas');
 
     const subtitle = document.createElement('p');
     subtitle.className = 'review-inspector-subtitle';
-    subtitle.textContent = 'Jump back to the related jamo task to fix this glyph.';
+    subtitle.textContent = '이 글자를 고치려면 관련 자모 입력 항목으로 이동하세요.';
 
     const list = document.createElement('div');
     list.className = 'review-edit-targets';
@@ -683,8 +959,8 @@ class FonttoApp {
   _renderReviewEmptyState(container) {
     container.innerHTML = `
       <div class="review-empty-panel">
-        <h3 class="review-inspector-title">No selection</h3>
-        <p class="review-inspector-subtitle">Change the filter or pick a glyph from the review grid.</p>
+        <h3 class="review-inspector-title">선택한 글자 없음</h3>
+        <p class="review-inspector-subtitle">필터를 바꾸거나 검수 그리드에서 글자를 선택하세요.</p>
       </div>
     `;
   }
@@ -736,23 +1012,10 @@ class FonttoApp {
   }
 
   _getSyllableJamoSequence(choIdx, jungIdx, jongIdx) {
-    const choInfo = getChoInfo(choIdx);
-    const jungInfo = getJungInfo(jungIdx);
-    const jongInfo = getJongInfo(jongIdx);
-    const sequence = [choInfo.base];
-
-    if (jungInfo.isCompound && jungInfo.components?.length) {
-      sequence.push(...jungInfo.components);
-    } else {
-      sequence.push(JUNG[jungIdx]);
-    }
+    const sequence = [CHO[choIdx], JUNG[jungIdx]];
 
     if (jongIdx > 0) {
-      if (jongInfo?.isCompound && jongInfo.components?.length) {
-        sequence.push(...jongInfo.components);
-      } else {
-        sequence.push(JONG[jongIdx]);
-      }
+      sequence.push(JONG[jongIdx]);
     }
 
     return sequence;
@@ -861,31 +1124,23 @@ class FonttoApp {
         ? 'jong_m'
         : 'jong_v';
     const hasFinal = jongIdx > 0;
-    const choInfo = getChoInfo(choIdx);
-    const jungInfo = getJungInfo(jungIdx);
+    const choJamo = CHO[choIdx];
+    const jungJamo = JUNG[jungIdx];
     const jongInfo = getJongInfo(jongIdx);
-    const choContext = `${vowelCategory === 'vertical' ? '세로모음' : '가로/복합모음'} · ${hasFinal ? '받침 있음' : '받침 없음'}`;
+    const choContext = `${vowelCategory === 'vertical' ? '세로모음' : vowelCategory === 'horizontal' ? '가로모음' : '복합모음'} · ${hasFinal ? '받침 있음' : '받침 없음'}`;
     const jungContext = hasFinal ? '받침 있음' : '받침 없음';
     const jongContext = vowelCategory === 'horizontal' ? '가로모음 뒤' : '세로/복합모음 뒤';
 
     targets.push({
-      categoryId: jongIdx > 0
-        ? (vowelCategory === 'vertical' ? 'cho_v_wf' : 'cho_h_wf')
-        : (vowelCategory === 'vertical' ? 'cho_v' : 'cho_h'),
-      jamo: choInfo.base,
-      label: `초성 ${choInfo.base} 적용 (${choContext})`,
+      categoryId: this._getChoCategoryIdForContext(vowelCategory, hasFinal),
+      jamo: choJamo,
+      label: `초성 ${choJamo} 적용 (${choContext})`,
     });
 
-    const jungItems = jungInfo.isCompound && jungInfo.components
-      ? jungInfo.components
-      : [JUNG[jungIdx]];
-
-    jungItems.forEach((jamo, index) => {
-      targets.push({
-        categoryId: jongIdx > 0 ? 'jung_wb' : 'jung_nb',
-        jamo,
-        label: `중성 ${jamo} 적용 (${jungContext})${jungItems.length > 1 ? ` ${index + 1}` : ''}`,
-      });
+    targets.push({
+      categoryId: jongIdx > 0 ? 'jung_wb' : 'jung_nb',
+      jamo: jungJamo,
+      label: `중성 ${jungJamo} 적용 (${jungContext})`,
     });
 
     if (jongIdx > 0) {
@@ -919,6 +1174,12 @@ class FonttoApp {
     });
   }
 
+  _getChoCategoryIdForContext(vowelCategory, hasFinal) {
+    if (vowelCategory === 'vertical') return hasFinal ? 'cho_v_wf' : 'cho_v';
+    if (vowelCategory === 'horizontal') return hasFinal ? 'cho_h_wf' : 'cho_h';
+    return hasFinal ? 'cho_m_wf' : 'cho_m';
+  }
+
   _showTemplateModal() {
     const slots = getTemplateSlots();
     const overlay = document.createElement('div');
@@ -926,48 +1187,49 @@ class FonttoApp {
     overlay.innerHTML = `
       <div class="modal template-modal">
         <div class="modal-header">
-          <h2>Template Import</h2>
+          <h2>템플릿 가져오기</h2>
           <button class="modal-close" id="closeTemplateModal">x</button>
         </div>
         <div class="modal-body template-body">
-          <p class="template-copy">Write the required source syllables on the template, upload it, then open each extracted card and assign only the parts you want to reuse.</p>
+          <p class="template-copy">템플릿에 필요한 원본 글자를 쓰고 업로드한 뒤, 추출된 카드를 열어 재사용할 획만 선택해 적용하세요.</p>
           <div class="template-actions">
-            <button class="gen-btn" id="downloadTemplateBtn">Download PNG Template</button>
-            <label class="gen-btn template-upload-btn" for="templateFileInput">Upload Filled Template</label>
-            <input type="file" id="templateFileInput" accept="image/*" class="template-file-input" />
+          <button class="gen-btn" id="downloadTemplateBtn">A4 PDF 템플릿 다운로드</button>
+          <button class="gen-btn" id="downloadTemplatePngBtn">A4 PNG 템플릿 다운로드</button>
+          <label class="gen-btn template-upload-btn" for="templateFileInput">작성한 템플릿 업로드</label>
+            <input type="file" id="templateFileInput" accept="image/*,.pdf,application/pdf" multiple class="template-file-input" />
           </div>
-          <div class="template-status" id="templateStatus">Template expects ${slots.length} source syllable boxes.</div>
+          <div class="template-status" id="templateStatus">템플릿에는 원본 글자 칸 ${slots.length}개가 필요합니다.</div>
           <div class="template-import-review" id="templateImportReview">
-            <div class="template-target-empty">Upload a filled template to review extracted source syllables here.</div>
+            <div class="template-target-empty">작성한 템플릿을 업로드하면 추출된 원본 글자를 여기에서 확인할 수 있습니다.</div>
           </div>
           <details class="template-manual-details">
-            <summary class="template-legacy-summary">Advanced single-syllable split</summary>
+            <summary class="template-legacy-summary">고급 단일 글자 분리</summary>
             <div class="template-manual">
               <div class="template-manual-header">
-                <h3>Split One Syllable</h3>
-                <p>Use this only when you want to decompose one completed syllable manually by selecting stroke groups.</p>
+                <h3>글자 하나 분리하기</h3>
+                <p>완성된 글자 하나에서 획 그룹을 직접 선택해 분리해야 할 때만 사용하세요.</p>
               </div>
               <div class="template-manual-controls">
                 <input type="text" class="gen-input template-syllable-input" id="templateSyllableInput" maxlength="1" placeholder="한" />
-                <label class="gen-btn template-upload-btn" for="templateSingleFileInput">Upload Syllable Image</label>
+                <label class="gen-btn template-upload-btn" for="templateSingleFileInput">글자 이미지 업로드</label>
                 <input type="file" id="templateSingleFileInput" accept="image/*" class="template-file-input" />
-              <button class="gen-btn" id="templateApplySelectionBtn" disabled>Apply to Glyph Cards</button>
+              <button class="gen-btn" id="templateApplySelectionBtn" disabled>글자 카드에 적용</button>
               </div>
-              <div class="template-status" id="templateManualStatus">Choose one Hangul syllable and an image containing only that syllable.</div>
+              <div class="template-status" id="templateManualStatus">한글 음절 한 글자와 그 글자만 포함된 이미지를 선택하세요.</div>
               <div class="template-manual-layout">
                 <canvas class="template-manual-canvas" id="templateManualCanvas" width="520" height="520"></canvas>
                 <div class="template-manual-sidebar">
                   <div class="template-target-list" id="templateTargetList"></div>
-                  <div class="template-selection-summary" id="templateSelectionSummary">No image loaded.</div>
+                  <div class="template-selection-summary" id="templateSelectionSummary">불러온 이미지가 없습니다.</div>
                 </div>
               </div>
             </div>
           </details>
           <details class="template-legacy">
-            <summary class="template-legacy-summary">Template preview</summary>
+            <summary class="template-legacy-summary">템플릿 미리보기</summary>
             <div class="template-legacy-body">
               <div class="template-preview-wrap">
-                <img alt="Template preview" class="template-preview-image" id="templatePreviewImage" />
+                <img alt="템플릿 미리보기" class="template-preview-image" id="templatePreviewImage" />
               </div>
             </div>
           </details>
@@ -1001,21 +1263,24 @@ class FonttoApp {
     document.getElementById('downloadTemplateBtn').addEventListener('click', async () => {
       await this._downloadTemplate(slots);
     });
+    document.getElementById('downloadTemplatePngBtn')?.addEventListener('click', async () => {
+      await this._downloadTemplatePng(slots);
+    });
 
     document.getElementById('templateFileInput').addEventListener('change', async (event) => {
       const [file] = event.target.files ?? [];
       if (!file) return;
 
       const statusEl = document.getElementById('templateStatus');
-      statusEl.textContent = 'Importing template...';
+      statusEl.textContent = '템플릿을 가져오는 중...';
 
       try {
         const summary = await this._importTemplateFile(file, slots);
-        statusEl.textContent = `Imported ${summary.imported} source syllables. Skipped ${summary.skipped} empty boxes.`;
+        statusEl.textContent = `원본 글자 ${summary.imported}개를 가져왔습니다. 빈 칸 ${summary.skipped}개는 건너뛰었습니다.`;
         this._renderTemplateImportReview(importReviewEl, summary.importedSlots, close);
       } catch (error) {
-        console.error('Template import failed:', error);
-        statusEl.textContent = `Import failed: ${error.message}`;
+        console.error('템플릿 가져오기 실패:', error);
+        statusEl.textContent = `가져오기 실패: ${error.message}`;
       }
     });
 
@@ -1038,7 +1303,7 @@ class FonttoApp {
       manualState.assignments = new Map();
       manualState.selectedComponentIds = new Set();
       manualStatus.textContent = manualState.targets.length
-        ? 'Upload an image, click stroke groups to select them, then right-click to assign them.'
+        ? '이미지를 업로드한 뒤 획 그룹을 클릭해 선택하고, 우클릭으로 적용 대상을 지정하세요.'
         : '가, 한 같은 한글 음절 한 글자를 입력하세요.';
       renderManual();
     });
@@ -1060,7 +1325,7 @@ class FonttoApp {
       const [file] = event.target.files ?? [];
       if (!file) return;
       if (!manualState.targets.length) {
-        manualStatus.textContent = 'Enter the syllable first so Fontto knows which parts to save.';
+        manualStatus.textContent = '어떤 부분을 저장할지 알 수 있도록 글자를 먼저 입력하세요.';
         return;
       }
 
@@ -1074,18 +1339,18 @@ class FonttoApp {
       manualState.extracted = extracted;
         manualState.assignments = new Map();
         manualState.selectedComponentIds = new Set();
-        manualStatus.textContent = `Detected ${extracted.components.length} stroke groups. Select groups, then right-click to assign them.`;
+        manualStatus.textContent = `획 그룹 ${extracted.components.length}개를 찾았습니다. 그룹을 선택한 뒤 우클릭으로 적용 대상을 지정하세요.`;
         renderManual();
       } catch (error) {
-        manualStatus.textContent = `Split failed: ${error.message}`;
+        manualStatus.textContent = `분리 실패: ${error.message}`;
       }
     });
 
     applyBtn.addEventListener('click', () => {
       const result = this._applyManualSplitAssignments(manualState);
       manualStatus.textContent = result.applied > 0
-        ? `Applied ${result.applied} part${result.applied === 1 ? '' : 's'} to the matching glyph card${result.applied === 1 ? '' : 's'}.`
-        : `Applied 0 parts: ${result.reason || 'select a stroke group and target first.'}`;
+        ? `일치하는 글자 카드에 부분 ${result.applied}개를 적용했습니다.`
+        : `적용된 부분이 없습니다: ${result.reason || '획 그룹과 적용 대상을 먼저 선택하세요.'}`;
       renderManual();
     });
 
@@ -1100,34 +1365,34 @@ class FonttoApp {
     overlay.innerHTML = `
       <div class="modal template-modal">
         <div class="modal-header">
-          <h2>Edit Imported Syllable</h2>
+          <h2>가져온 글자 편집</h2>
           <button class="modal-close" id="closeSyllableSplitModal">x</button>
         </div>
         <div class="modal-body template-body">
           <div class="template-manual">
             <div class="template-manual-header">
-              <h3>Split One Syllable</h3>
-              <p>Select the parts you want to reuse, then right-click to assign them to the matching initial, medial, or final target.</p>
+              <h3>글자 하나 분리하기</h3>
+              <p>재사용할 부분을 선택한 뒤 우클릭으로 일치하는 초성, 중성, 종성 대상에 지정하세요.</p>
             </div>
             <div class="template-manual-controls">
               <input type="text" class="gen-input template-syllable-input" id="splitSyllableInput" maxlength="1" placeholder="한" value="${initialChar}" />
-              <label class="gen-btn template-upload-btn" for="splitSingleFileInput">Replace Image</label>
+              <label class="gen-btn template-upload-btn" for="splitSingleFileInput">이미지 교체</label>
               <input type="file" id="splitSingleFileInput" accept="image/*" class="template-file-input" />
               <div class="template-edit-tools">
-                <button type="button" class="tool-btn active" id="splitSelectModeBtn">Select</button>
-                <button type="button" class="tool-btn" id="splitEraseModeBtn">Erase</button>
-                <button type="button" class="tool-btn" id="splitDrawModeBtn">Draw</button>
-                <button type="button" class="tool-btn" id="splitAutoAssignBtn">Auto Assign</button>
-                <label class="template-brush-control">Brush <input type="range" id="splitBrushSizeInput" min="6" max="42" value="18" /></label>
+                <button type="button" class="tool-btn active" id="splitSelectModeBtn">선택</button>
+                <button type="button" class="tool-btn" id="splitEraseModeBtn">지우기</button>
+                <button type="button" class="tool-btn" id="splitDrawModeBtn">그리기</button>
+                <button type="button" class="tool-btn" id="splitAutoAssignBtn">자동 지정</button>
+                <label class="template-brush-control">브러시 <input type="range" id="splitBrushSizeInput" min="6" max="42" value="18" /></label>
               </div>
-              <button class="gen-btn" id="splitApplySelectionBtn" disabled>Apply to Glyph Cards</button>
+              <button class="gen-btn" id="splitApplySelectionBtn" disabled>글자 카드에 적용</button>
             </div>
-            <div class="template-status" id="splitManualStatus">Load or replace the syllable image, then assign its parts.</div>
+            <div class="template-status" id="splitManualStatus">글자 이미지를 불러오거나 교체한 뒤, 각 부분의 적용 대상을 지정하세요.</div>
             <div class="template-manual-layout">
               <canvas class="template-manual-canvas" id="splitManualCanvas" width="520" height="520"></canvas>
               <div class="template-manual-sidebar">
                 <div class="template-target-list" id="splitTargetList"></div>
-                <div class="template-selection-summary" id="splitSelectionSummary">No image loaded.</div>
+                <div class="template-selection-summary" id="splitSelectionSummary">불러온 이미지가 없습니다.</div>
               </div>
             </div>
           </div>
@@ -1184,7 +1449,7 @@ class FonttoApp {
       state.editImageData = this._imageDataFromExtractedMask(state.extracted);
       state.assignments = new Map();
       state.selectedComponentIds = new Set();
-      manualStatus.textContent = `Detected ${state.extracted.components.length} stroke groups. Select groups, then right-click to assign them.`;
+      manualStatus.textContent = `획 그룹 ${state.extracted.components.length}개를 찾았습니다. 그룹을 선택한 뒤 우클릭으로 적용 대상을 지정하세요.`;
       render();
     };
 
@@ -1203,7 +1468,7 @@ class FonttoApp {
       if (state.imageSrc) {
         await loadImageIntoState(state.imageSrc);
       } else {
-        manualStatus.textContent = 'Replace the image or pick one imported glyph card from the browser.';
+        manualStatus.textContent = '이미지를 교체하거나 글자 보기에서 가져온 글자 카드를 선택하세요.';
         render();
       }
     });
@@ -1258,7 +1523,7 @@ class FonttoApp {
     drawModeBtn?.addEventListener('click', () => setEditMode('draw'));
     autoAssignBtn?.addEventListener('click', () => {
       const result = this._autoAssignManualSplitTargets(state);
-      manualStatus.textContent = `Auto assigned ${result.assigned} group${result.assigned === 1 ? '' : 's'}. ${result.needsReview} group${result.needsReview === 1 ? '' : 's'} need review.`;
+      manualStatus.textContent = `그룹 ${result.assigned}개를 자동 지정했습니다. 그룹 ${result.needsReview}개는 확인이 필요합니다.`;
       setEditMode('select');
       render();
     });
@@ -1270,7 +1535,7 @@ class FonttoApp {
       const [file] = event.target.files ?? [];
       if (!file) return;
       if (!this._getTargetsForManualSplit(state.char).length) {
-        manualStatus.textContent = 'Enter the syllable first so Fontto knows where to save the parts.';
+        manualStatus.textContent = '부분을 어디에 저장할지 알 수 있도록 글자를 먼저 입력하세요.';
         return;
       }
       const src = await this._readFileAsDataUrl(file);
@@ -1280,8 +1545,8 @@ class FonttoApp {
     applyBtn.addEventListener('click', () => {
       const result = this._applyManualSplitAssignments(state);
       manualStatus.textContent = result.applied > 0
-        ? `Applied ${result.applied} part${result.applied === 1 ? '' : 's'} to the matching glyph card${result.applied === 1 ? '' : 's'}.`
-        : `Applied 0 parts: ${result.reason || 'select a stroke group and target first.'}`;
+        ? `일치하는 글자 카드에 부분 ${result.applied}개를 적용했습니다.`
+        : `적용된 부분이 없습니다: ${result.reason || '획 그룹과 적용 대상을 먼저 선택하세요.'}`;
       render();
     });
 
@@ -1289,7 +1554,7 @@ class FonttoApp {
       try {
         await loadImageIntoState(state.imageSrc);
       } catch (error) {
-        manualStatus.textContent = `Failed to load imported image: ${error.message}`;
+        manualStatus.textContent = `가져온 이미지를 불러오지 못했습니다: ${error.message}`;
       }
     } else {
       render();
@@ -1297,44 +1562,101 @@ class FonttoApp {
   }
 
   async _downloadTemplate(slots) {
-    const svg = buildTemplateSvg(slots);
-    const metrics = getTemplateMetrics(slots.length);
-    const svgUrl = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }));
-    const image = await this._readImageSource(svgUrl);
-    const canvas = document.createElement('canvas');
-    canvas.width = metrics.width;
-    canvas.height = metrics.height;
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#f3f5fb';
-    ctx.fillRect(0, 0, metrics.width, metrics.height);
-    ctx.drawImage(image, 0, 0, metrics.width, metrics.height);
-
-    const url = canvas.toDataURL('image/png');
+    const pdfBytes = await buildTemplatePdfBytes(slots, (src) => this._readImageSource(src));
+    const url = URL.createObjectURL(new Blob([pdfBytes], { type: 'application/pdf' }));
     const link = document.createElement('a');
     link.href = url;
-    link.download = 'fontto-template.png';
+    link.download = 'fontto-template.pdf';
     link.click();
-    URL.revokeObjectURL(svgUrl);
+    URL.revokeObjectURL(url);
   }
 
-  async _importTemplateFile(file, slots) {
-    const image = await this._readImageFile(file);
-    const metrics = getTemplateMetrics(slots.length);
-    this._validateTemplateImage(image, metrics);
+  async _downloadTemplatePng(slots) {
+    const pages = getTemplatePages(slots);
+    for (let pageIndex = 0; pageIndex < pages.length; pageIndex += 1) {
+      const pageSlots = pages[pageIndex];
+      const svg = buildTemplateSvg(pageSlots, pageIndex, pages.length);
+      const metrics = getTemplateMetrics(pageSlots.length);
+      const svgUrl = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }));
+      const image = await this._readImageSource(svgUrl);
+      const canvas = document.createElement('canvas');
+      canvas.width = metrics.width;
+      canvas.height = metrics.height;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#f3f5fb';
+      ctx.fillRect(0, 0, metrics.width, metrics.height);
+      ctx.drawImage(image, 0, 0, metrics.width, metrics.height);
+
+      const url = canvas.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `fontto-template-page-${String(pageIndex + 1).padStart(2, '0')}.png`;
+      link.click();
+      URL.revokeObjectURL(svgUrl);
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+  }
+
+  async _importTemplateFiles(files, slots) {
+    const historySnapshot = this._captureHistorySnapshot();
+    const sources = await this._expandTemplateUploadFiles(files);
+    const pages = getTemplatePages(slots);
+    const importedByChar = new Map();
+    let imported = 0;
+    let skipped = 0;
+
+    for (let pageIndex = 0; pageIndex < pages.length; pageIndex += 1) {
+      const source = sources[pageIndex];
+      if (!source) {
+        skipped += pages[pageIndex].length;
+        continue;
+      }
+      const result = this._importTemplateSource(source, pages[pageIndex], pageIndex);
+      skipped += result.skipped;
+      result.importedSlots.forEach((slot) => {
+        if (importedByChar.has(slot.char)) return;
+        importedByChar.set(slot.char, slot);
+        imported += 1;
+      });
+    }
+
+    const importedSlots = [...importedByChar.values()];
+    this.templateImportedSlots = importedSlots;
+    this._persistState();
+    this._pushHistorySnapshot(historySnapshot, '템플릿 원본 저장');
+    showToast(`템플릿 가져오기 완료: 원본 글자 ${imported}개`, imported > 0 ? 'success' : 'warning', 3200);
+
+    return { imported, skipped, importedSlots, pages: sources.length };
+  }
+
+  async _expandTemplateUploadFiles(files) {
+    const sources = [];
+    for (const file of files) {
+      const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+      if (isPdf) {
+        sources.push(...await renderPdfFileToCanvases(file));
+      } else {
+        sources.push(await this._readImageFile(file));
+      }
+    }
+    return sources;
+  }
+
+  _importTemplateSource(source, pageSlots, pageIndex) {
+    const metrics = getTemplateMetrics(pageSlots.length);
+    this._validateTemplateImage(source, metrics);
     const canvas = document.createElement('canvas');
     canvas.width = metrics.width;
     canvas.height = metrics.height;
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, metrics.width, metrics.height);
-    ctx.drawImage(image, 0, 0, metrics.width, metrics.height);
+    ctx.drawImage(source, 0, 0, metrics.width, metrics.height);
 
-    let imported = 0;
     let skipped = 0;
     const importedSlots = [];
-    const importedByChar = new Map();
 
-    slots.forEach((slot, index) => {
+    pageSlots.forEach((slot, index) => {
       const cellRect = getTemplateCellRect(index, metrics);
       const importRect = getTemplateImportRect(cellRect, metrics);
       const imageData = ctx.getImageData(importRect.x, importRect.y, importRect.w, importRect.h);
@@ -1347,59 +1669,45 @@ class FonttoApp {
 
       const cleanImageData = rasterRectToCleanImageData(imageData);
       const imageSrc = this._createImageDataUrl(cleanImageData);
-      if (!this.syllableImports[slot.example]) {
-        this.syllableImports[slot.example] = {
-          imageSrc,
-          sourceChar: slot.example,
-        };
-      }
 
-      if (!importedByChar.has(slot.example)) {
-        importedByChar.set(slot.example, {
-          char: slot.example,
-          sourceJamo: slot.jamo,
-          categoryId: slot.categoryId,
-          categoryLabel: slot.categoryLabel,
-          imageSrc,
-          targets: this._getTargetsForManualSplit(slot.example),
-        });
-        imported += 1;
-      }
+      importedSlots.push({
+        char: slot.example,
+        sourceJamo: slot.jamo,
+        categoryId: slot.categoryId,
+        categoryLabel: slot.categoryLabel,
+        imageSrc,
+        pageIndex,
+        targets: this._getTargetsForManualSplit(slot.example),
+      });
     });
 
-    importedSlots.push(...importedByChar.values());
-    this.previewPanel.updateSyllableImports(this.syllableImports);
-    if (this.browserPanel) this.browserPanel.updateSyllableImports(this.syllableImports);
-    this._persistState();
-    showToast(`Template import complete: ${imported} source syllables`, imported > 0 ? 'success' : 'warning', 3200);
-
-    return { imported, skipped, importedSlots };
+    return { skipped, importedSlots };
   }
 
   _renderTemplateImportReview(container, importedSlots, closeModal) {
     if (!container) return;
 
     if (!importedSlots?.length) {
-      container.innerHTML = '<div class="template-target-empty">No source syllables were extracted from the uploaded template.</div>';
+      container.innerHTML = '<div class="template-target-empty">업로드한 템플릿에서 추출된 원본 글자가 없습니다.</div>';
       return;
     }
 
     container.innerHTML = `
       <div class="template-import-review-header">
-        <h3>Extracted Source Syllables</h3>
-        <p>Click a card to split it, then right-click the selected strokes to apply the needed part to the matching jamo slots.</p>
+        <h3>추출된 원본 글자</h3>
+        <p>카드를 클릭해 글자를 분리한 뒤, 선택한 획을 우클릭해 필요한 부분을 일치하는 자모 칸에 적용하세요.</p>
       </div>
       <div class="template-import-review-grid"></div>
     `;
 
     const grid = container.querySelector('.template-import-review-grid');
-    importedSlots.forEach((slot) => {
+    importedSlots.forEach((slot, index) => {
       const card = document.createElement('button');
       card.type = 'button';
       card.className = 'template-import-card';
       const image = document.createElement('img');
       image.className = 'template-import-card-image';
-      image.alt = `${slot.char} source`;
+      image.alt = `${slot.char} 원본`;
       image.src = slot.imageSrc;
 
       const title = document.createElement('span');
@@ -1417,9 +1725,11 @@ class FonttoApp {
         showSyllableSplitModal(this, slot.char, {
           imageSrc: slot.imageSrc,
           targets: slot.targets,
+          sequence: importedSlots,
+          sequenceIndex: index,
         });
         closeModal?.();
-        showToast(`Opened ${slot.char} for part assignment.`, 'success', 2200);
+        showToast(`${slot.char} 글자의 부분 적용 화면을 열었습니다.`, 'success', 2200);
       });
 
       grid.appendChild(card);
@@ -1429,7 +1739,7 @@ class FonttoApp {
   _readImageFile(file) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onerror = () => reject(new Error('Failed to read the template file.'));
+      reader.onerror = () => reject(new Error('템플릿 파일을 읽지 못했습니다.'));
       reader.onload = () => {
         this._readImageSource(reader.result).then(resolve).catch(reject);
       };
@@ -1440,7 +1750,7 @@ class FonttoApp {
   _readFileAsDataUrl(file) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onerror = () => reject(new Error('Failed to read the image file.'));
+      reader.onerror = () => reject(new Error('이미지 파일을 읽지 못했습니다.'));
       reader.onload = () => resolve(reader.result);
       reader.readAsDataURL(file);
     });
@@ -1450,7 +1760,7 @@ class FonttoApp {
     return new Promise((resolve, reject) => {
       const img = new Image();
       img.onload = () => resolve(img);
-      img.onerror = () => reject(new Error('Unsupported image file.'));
+      img.onerror = () => reject(new Error('지원하지 않는 이미지 파일입니다.'));
       img.src = src;
     });
   }
@@ -1470,11 +1780,11 @@ class FonttoApp {
     const ratioDelta = Math.abs(actualRatio - expectedRatio) / expectedRatio;
 
     if (ratioDelta > 0.08) {
-      throw new Error('This image does not match the Fontto template layout. Please upload the downloaded template PNG, not a browser screenshot.');
+      throw new Error('이 이미지는 Fontto 템플릿 형식과 맞지 않습니다. 브라우저 스크린샷이 아니라 다운로드한 템플릿 PNG를 업로드하세요.');
     }
 
     if (image.width < metrics.width * 0.65 || image.height < metrics.height * 0.65) {
-      throw new Error('Template image is too small. Export or scan the sheet at a higher resolution.');
+      throw new Error('템플릿 이미지가 너무 작습니다. 더 높은 해상도로 내보내거나 스캔하세요.');
     }
   }
 
@@ -1502,7 +1812,7 @@ class FonttoApp {
     const imageData = ctx.getImageData(0, 0, size, size);
     const extracted = extractRasterComponents(imageData);
     if (extracted.components.length === 0) {
-      throw new Error('No stroke groups were detected in the uploaded image.');
+      throw new Error('업로드한 이미지에서 획 그룹을 찾지 못했습니다.');
     }
 
     return extracted;
@@ -1701,17 +2011,17 @@ class FonttoApp {
     const selectedCount = state.selectedComponentIds?.size ?? 0;
     const totalAssigned = state.assignments.size;
     const modeText = state.editMode === 'erase'
-      ? 'Erase mode: drag across connected strokes to split them.'
+      ? '지우기 모드: 연결된 획 위를 드래그해 분리하세요.'
       : state.editMode === 'draw'
-        ? 'Draw mode: restore missing stroke pixels.'
-        : 'Select mode: click groups, then apply them to the active target.';
-    selectionSummary.textContent = `${state.extracted.components.length} groups detected. ${selectedCount} groups selected. ${totalAssigned} groups assigned overall. ${modeText}`;
+        ? '그리기 모드: 누락된 획 픽셀을 복원하세요.'
+        : '선택 모드: 그룹을 클릭한 뒤 현재 대상에 적용하세요.';
+    selectionSummary.textContent = `획 그룹 ${state.extracted.components.length}개를 찾았습니다. ${selectedCount}개 선택됨, 전체 ${totalAssigned}개 지정됨. ${modeText}`;
   }
 
   _renderManualTargetList(targetList, state, rerender) {
     targetList.innerHTML = '';
     if (!state.targets.length) {
-      targetList.innerHTML = '<div class="template-target-empty">Enter one Hangul syllable to create split targets.</div>';
+      targetList.innerHTML = '<div class="template-target-empty">분리 대상을 만들려면 한글 음절 한 글자를 입력하세요.</div>';
       return;
     }
 
@@ -1831,8 +2141,10 @@ class FonttoApp {
 
   _applyManualSplitAssignments(state) {
     if (!state.extracted || !state.targets.length) {
-      return { applied: 0, reason: 'No glyph image or target list is loaded.' };
+      return { applied: 0, reason: '불러온 글자 이미지나 대상 목록이 없습니다.' };
     }
+
+    const historySnapshot = this._captureHistorySnapshot();
 
     if (state.selectedComponentIds?.size && state.activeTargetIndex >= 0) {
       this._assignSelectedComponentsToTarget(state, state.activeTargetIndex);
@@ -1846,13 +2158,13 @@ class FonttoApp {
         .filter(([, targetIndex]) => targetIndex === index)
         .map(([componentId]) => componentId);
       if (!componentIds.length) {
-        skipped.push(`${target.label}: no stroke group assigned`);
+        skipped.push(`${target.label}: 지정된 획 그룹 없음`);
         return;
       }
 
       const selection = this._getSelectionForTarget(target.categoryId, target.jamo);
       if (!selection) {
-        skipped.push(`${target.label}: no matching target slot`);
+        skipped.push(`${target.label}: 일치하는 대상 칸 없음`);
         return;
       }
 
@@ -1863,7 +2175,7 @@ class FonttoApp {
         strokes = selectedComponentsToStrokes(state.extracted, componentIds);
       }
       if (!commands.length) {
-        skipped.push(`${target.label}: selected stroke could not be converted`);
+        skipped.push(`${target.label}: 선택한 획을 변환할 수 없음`);
         return;
       }
 
@@ -1882,21 +2194,80 @@ class FonttoApp {
       const fullLib = deriveAll(this.jamoLib);
       this.previewPanel.updateJamoLib(fullLib);
       if (this.browserPanel) this.browserPanel.updateJamoLib(fullLib);
+      if (this.templateBrowserPanel) this.templateBrowserPanel.updateJamoLib(fullLib);
       this.previewPanel.updateSyllableImports(this.syllableImports);
       if (this.browserPanel) this.browserPanel.updateSyllableImports(this.syllableImports);
+      if (this.templateBrowserPanel) this.templateBrowserPanel.updateSyllableImports(this.syllableImports);
       this._persistState();
+      this._pushHistorySnapshot(historySnapshot, '글자 카드에 부분 적용');
       this._checkGenerateReady();
       this._renderPendingPartsPanel();
       const affectedChars = this._getAffectedCharsForTargets(appliedTargets);
       if (affectedChars[0]) {
         this.browserPanel?.focusBrowserChar(affectedChars[0]);
+        this.templateBrowserPanel?.focusBrowserChar(affectedChars[0]);
       }
-      showToast(`Applied ${applied} part${applied === 1 ? '' : 's'} to matching glyph cards.`, 'success', 2600);
+      showToast(`일치하는 글자 카드에 부분 ${applied}개를 적용했습니다.`, 'success', 2600);
     }
 
     return {
       applied,
-      reason: skipped.find((item) => !item.includes('no stroke group assigned')) || skipped[0] || '',
+      reason: skipped.find((item) => !item.includes('지정된 획 그룹 없음')) || skipped[0] || '',
+    };
+  }
+
+  _saveManualSplitAssignmentsToPending(state) {
+    if (!state.extracted || !state.targets.length) {
+      return { saved: 0, reason: '불러온 글자 이미지나 대상 목록이 없습니다.' };
+    }
+
+    const historySnapshot = this._captureHistorySnapshot();
+
+    if (state.selectedComponentIds?.size && state.activeTargetIndex >= 0) {
+      this._assignSelectedComponentsToTarget(state, state.activeTargetIndex);
+    }
+
+    let saved = 0;
+    const skipped = [];
+    state.targets.forEach((target, index) => {
+      const componentIds = [...state.assignments.entries()]
+        .filter(([, targetIndex]) => targetIndex === index)
+        .map(([componentId]) => componentId);
+      if (!componentIds.length) {
+        skipped.push(`${target.label}: 지정된 획 그룹 없음`);
+        return;
+      }
+
+      const selection = this._getSelectionForTarget(target.categoryId, target.jamo);
+      if (!selection) {
+        skipped.push(`${target.label}: 일치하는 대상 칸 없음`);
+        return;
+      }
+
+      let commands = selectedComponentsToPositionedCommands(state.extracted, componentIds);
+      let strokes = selectedComponentsToStrokes(state.extracted, componentIds, selection.guide?.targetRegion);
+      if (!commands.length) {
+        commands = selectedComponentsToCommands(state.extracted, componentIds);
+        strokes = selectedComponentsToStrokes(state.extracted, componentIds);
+      }
+      if (!commands.length) {
+        skipped.push(`${target.label}: 선택한 획을 변환할 수 없음`);
+        return;
+      }
+
+      this._storePendingSelection(selection, commands, strokes, state.char || 'template');
+      saved += 1;
+    });
+
+    if (saved > 0) {
+      this._pushHistorySnapshot(historySnapshot, '부분 임시 저장');
+      this._renderPendingPartsPanel();
+      showToast(`부분 ${saved}개를 저장된 부분에 추가했습니다.`, 'success', 2400);
+    }
+
+    return {
+      saved,
+      reason: skipped.find((item) => !item.includes('지정된 획 그룹 없음')) || skipped[0] || '',
     };
   }
 
@@ -1979,10 +2350,11 @@ class FonttoApp {
   _applyPendingParts() {
     const parts = Object.values(this.pendingParts);
     if (parts.length === 0) {
-      showToast('No saved parts to apply.', 'warning', 2200);
+      showToast('적용할 저장된 부분이 없습니다.', 'warning', 2200);
       return;
     }
 
+    const historySnapshot = this._captureHistorySnapshot();
     const appliedTargets = [];
     parts.forEach((part) => {
       this._storeImportedSelection(part.selection, part.commands, part.strokes);
@@ -1996,25 +2368,33 @@ class FonttoApp {
     const fullLib = deriveAll(this.jamoLib);
     this.previewPanel.updateJamoLib(fullLib);
     if (this.browserPanel) this.browserPanel.updateJamoLib(fullLib);
+    if (this.templateBrowserPanel) this.templateBrowserPanel.updateJamoLib(fullLib);
     this.previewPanel.updateSyllableImports(this.syllableImports);
     if (this.browserPanel) this.browserPanel.updateSyllableImports(this.syllableImports);
+    if (this.templateBrowserPanel) this.templateBrowserPanel.updateSyllableImports(this.syllableImports);
     this._persistState();
+    this._pushHistorySnapshot(historySnapshot, '저장된 부분 적용');
     this._checkGenerateReady();
     this._renderPendingPartsPanel();
 
     const affectedChars = this._getAffectedCharsForTargets(appliedTargets);
     if (affectedChars[0]) {
       this.browserPanel?.focusBrowserChar(affectedChars[0]);
+      this.templateBrowserPanel?.focusBrowserChar(affectedChars[0]);
     }
-    showToast(`Applied ${parts.length} saved part${parts.length === 1 ? '' : 's'} to glyphs.`, 'success', 3000);
+    showToast(`저장된 부분 ${parts.length}개를 글자에 적용했습니다.`, 'success', 3000);
   }
 
   _clearPendingPart(key) {
+    if (!this.pendingParts[key]) return;
+    this._recordHistory('저장된 부분 삭제');
     delete this.pendingParts[key];
     this._renderPendingPartsPanel();
   }
 
   _clearAllPendingParts() {
+    if (Object.keys(this.pendingParts).length === 0) return;
+    this._recordHistory('저장된 부분 비우기');
     this.pendingParts = {};
     this._renderPendingPartsPanel();
   }
@@ -2048,6 +2428,7 @@ class FonttoApp {
       strokes,
       importedStrokes: strokes,
     };
+    this._trackRecentJamoEdit(`${selection.categoryId}_${selection.jamo}`);
     this.jamoGrid.markCompleted(selection.categoryId, selection.jamo);
   }
 
@@ -2059,7 +2440,7 @@ class FonttoApp {
     overlay.innerHTML = `
       <div class="modal preview-modal">
         <div class="modal-header">
-          <h2>Preview</h2>
+          <h2>미리보기</h2>
           <button class="modal-close" id="closePreviewModal">x</button>
         </div>
         <div class="modal-body">
@@ -2151,6 +2532,7 @@ class FonttoApp {
     if (this.drawingCanvas) this.drawingCanvas.resize();
     if (this.previewPanel) this.previewPanel.resize();
     if (this.browserPanel) this.browserPanel.resize();
+    if (this.templateBrowserPanel) this.templateBrowserPanel.resize();
   }
 
   _persistState() {
@@ -2159,6 +2541,7 @@ class FonttoApp {
       jamoDrafts: this.jamoDrafts,
       guideOverrides: this.guideOverrides,
       syllableImports: this.syllableImports,
+      templateImportedSlots: this.templateImportedSlots,
     });
   }
 
@@ -2179,6 +2562,7 @@ class FonttoApp {
   _handleGuideRegionChange(region) {
     if (!this.currentSelectionKey) return;
 
+    this._recordHistory('가이드 박스 조정');
     if (region) {
       this.guideOverrides[this.currentSelectionKey] = { ...region };
     } else {
@@ -2192,16 +2576,18 @@ class FonttoApp {
     const selection = this.jamoGrid?.getCurrentSelection();
     if (!selection) return;
 
-    delete this.guideOverrides[
-      this._getGuideOverrideKey(
-        selection.categoryId,
-        `${selection.categoryId}_${selection.jamo}`,
-        selection.guide
-      )
-    ];
+    const overrideKey = this._getGuideOverrideKey(
+      selection.categoryId,
+      `${selection.categoryId}_${selection.jamo}`,
+      selection.guide
+    );
+    if (!this.guideOverrides[overrideKey]) return;
+
+    this._recordHistory('가이드 박스 초기화');
+    delete this.guideOverrides[overrideKey];
     this._persistState();
     this.drawingCanvas.resetGuideTargetRegion(false);
-    showToast('Target box reset to the default guide.', 'success', 1800);
+    showToast('대상 박스를 기본 가이드로 초기화했습니다.', 'success', 1800);
   }
 
   _getGuideOverrideKey(categoryId, itemKey, guide) {
@@ -2258,7 +2644,7 @@ class FonttoApp {
     if (!report?.hasContent) {
       panel.className = 'quality-panel';
       panel.innerHTML = `
-        <div class="quality-summary">Draw inside the guide to see size and overflow checks before saving.</div>
+        <div class="quality-summary">저장 전에 크기와 넘침 상태를 확인하려면 가이드 안에 그려주세요.</div>
       `;
       return;
     }
@@ -2276,20 +2662,20 @@ class FonttoApp {
     panel.className = `quality-panel ${panelState}`;
     panel.innerHTML = `
       <div class="quality-summary">
-        <span>Strokes ${report.strokeCount}</span>
-        <span>Points ${report.pointCount}</span>
+        <span>획 ${report.strokeCount}</span>
+        <span>점 ${report.pointCount}</span>
         ${metrics
-          ? `<span>Fill ${Math.round(metrics.fillRatio * 100)}%</span>
-             <span>Overflow ${Math.round(metrics.overflowRatio * 100)}%</span>
-             <span>Center ${Math.round(Math.max(metrics.centerOffsetX ?? 0, metrics.centerOffsetY ?? 0) * 100)}%</span>`
-          : '<span>Free input</span>'}
+          ? `<span>채움 ${Math.round(metrics.fillRatio * 100)}%</span>
+             <span>넘침 ${Math.round(metrics.overflowRatio * 100)}%</span>
+             <span>중심 ${Math.round(Math.max(metrics.centerOffsetX ?? 0, metrics.centerOffsetY ?? 0) * 100)}%</span>`
+          : '<span>자유 입력</span>'}
       </div>
       <div class="quality-message">
         ${report.hasBlockingWarnings
-          ? '<strong>You can still save this, but the composed glyph may become unstable.</strong>'
+          ? '<strong>저장은 가능하지만 조합된 글자 모양이 불안정할 수 있습니다.</strong>'
           : report.warnings.length > 0
-            ? '<strong>Saving is allowed, but the result will improve if you fix the items below.</strong>'
-            : '<strong>The current drawing looks stable.</strong>'}
+            ? '<strong>저장은 가능하지만 아래 항목을 수정하면 결과가 더 좋아집니다.</strong>'
+            : '<strong>현재 그림 상태가 안정적입니다.</strong>'}
       </div>
       ${report.warnings.length > 0
         ? `<ul class="quality-warnings">${warningItems}</ul>`
@@ -2300,17 +2686,17 @@ class FonttoApp {
   _getQualityWarningMessage(warning) {
     switch (warning?.code) {
       case 'too_small':
-        return 'The drawing is too small for the target region. Try drawing it larger.';
+        return '대상 영역에 비해 그림이 너무 작습니다. 더 크게 그려보세요.';
       case 'overflow':
-        return 'Part of the stroke goes outside the guide region. Keep it inside the box.';
+        return '획 일부가 가이드 영역 밖으로 나갔습니다. 박스 안에 맞춰주세요.';
       case 'low_stroke_detail':
-        return 'The stroke data is very sparse. Check that the input was captured correctly.';
+        return '획 데이터가 너무 적습니다. 입력이 제대로 기록됐는지 확인하세요.';
       case 'off_center':
-        return 'The drawing is off-center in the guide box. Re-center it before saving.';
+        return '그림이 가이드 박스 중심에서 벗어났습니다. 저장 전에 가운데로 맞춰주세요.';
       case 'skewed_shape':
-        return 'The drawing is squeezed into a very thin area. Check the guide fit and redraw if needed.';
+        return '그림이 너무 얇은 영역에 몰려 있습니다. 가이드 위치를 확인하고 필요하면 다시 그리세요.';
       default:
-        return warning?.message || 'Review the drawing quality before saving.';
+        return warning?.message || '저장하기 전에 그림 품질을 확인하세요.';
     }
   }
 
@@ -2320,7 +2706,7 @@ class FonttoApp {
 
   _showQualityToast(warnings) {
     const uniqueMessages = this._getQualityMessages(warnings);
-    showToast(`Saved. ${uniqueMessages.join(' / ')}`, 'warning', 4200);
+    showToast(`저장했습니다. ${uniqueMessages.join(' / ')}`, 'warning', 4200);
   }
 
   _showQualityConfirmModal(report, onConfirm) {
@@ -2333,15 +2719,15 @@ class FonttoApp {
     overlay.innerHTML = `
       <div class="modal quality-confirm-modal">
         <div class="modal-header">
-          <h2>Confirm Save</h2>
+          <h2>저장 확인</h2>
           <button class="modal-close" id="closeQualityConfirmModal">x</button>
         </div>
         <div class="modal-body quality-confirm-body">
-          <p class="quality-confirm-copy">This drawing may produce unstable glyphs. Review the warnings or save anyway.</p>
+          <p class="quality-confirm-copy">이 그림은 글자 모양이 불안정하게 생성될 수 있습니다. 경고를 확인하거나 그대로 저장하세요.</p>
           <ul class="quality-warnings">${warningItems}</ul>
           <div class="quality-confirm-actions">
-            <button class="gen-btn" id="qualityConfirmCancelBtn">Keep editing</button>
-            <button class="gen-btn download-btn" id="qualityConfirmSaveBtn">Save anyway</button>
+            <button class="gen-btn" id="qualityConfirmCancelBtn">계속 수정</button>
+            <button class="gen-btn download-btn" id="qualityConfirmSaveBtn">그대로 저장</button>
           </div>
         </div>
       </div>

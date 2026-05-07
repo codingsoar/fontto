@@ -6,10 +6,11 @@ const STORAGE_KEY = 'fontto-jamo-lib-v1';
 const DRAFT_STORAGE_KEY = 'fontto-jamo-drafts-v1';
 const GUIDE_BOX_STORAGE_KEY = 'fontto-guide-boxes-v1';
 const SYLLABLE_IMPORT_STORAGE_KEY = 'fontto-syllable-imports-v1';
+const TEMPLATE_SOURCE_STORAGE_KEY = 'fontto-template-sources-v1';
 
 /**
  * Load all saved state from localStorage
- * @returns {{ jamoLib: Object, jamoDrafts: Object, guideOverrides: Object, syllableImports: Object }}
+ * @returns {{ jamoLib: Object, jamoDrafts: Object, guideOverrides: Object, syllableImports: Object, templateImportedSlots: Array }}
  */
 export function loadState() {
   const state = {
@@ -17,6 +18,7 @@ export function loadState() {
     jamoDrafts: {},
     guideOverrides: {},
     syllableImports: {},
+    templateImportedSlots: [],
   };
 
   try {
@@ -51,6 +53,14 @@ export function loadState() {
         state.syllableImports = parsedSyllables;
       }
     }
+
+    const templateRaw = window.localStorage.getItem(TEMPLATE_SOURCE_STORAGE_KEY);
+    if (templateRaw) {
+      const parsedTemplateSources = JSON.parse(templateRaw);
+      if (Array.isArray(parsedTemplateSources)) {
+        state.templateImportedSlots = parsedTemplateSources;
+      }
+    }
   } catch (error) {
     console.warn('Failed to load saved jamo library:', error);
   }
@@ -60,7 +70,7 @@ export function loadState() {
 
 /**
  * Persist all state to localStorage
- * @param {{ jamoLib: Object, jamoDrafts: Object, guideOverrides: Object, syllableImports: Object }} state
+ * @param {{ jamoLib: Object, jamoDrafts: Object, guideOverrides: Object, syllableImports: Object, templateImportedSlots: Array }} state
  */
 export function saveState(state) {
   try {
@@ -68,6 +78,7 @@ export function saveState(state) {
     window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(state.jamoDrafts));
     window.localStorage.setItem(GUIDE_BOX_STORAGE_KEY, JSON.stringify(state.guideOverrides));
     window.localStorage.setItem(SYLLABLE_IMPORT_STORAGE_KEY, JSON.stringify(state.syllableImports));
+    window.localStorage.setItem(TEMPLATE_SOURCE_STORAGE_KEY, JSON.stringify(state.templateImportedSlots || []));
   } catch (error) {
     console.warn('Failed to persist jamo library:', error);
   }
