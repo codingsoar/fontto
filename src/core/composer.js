@@ -192,30 +192,38 @@ function composeJongCommands(jongIdx, jungIdx, layout, jamoLib) {
   return fitCommandsToSlot(jongCmds, layout.jong);
 }
 
-export function composeSyllable(choIdx, jungIdx, jongIdx, jamoLib) {
+export function composeSyllableParts(choIdx, jungIdx, jongIdx, jamoLib) {
   const layout = getCompositionLayout(jungIdx, jongIdx);
-  if (!layout) return [];
-
-  const result = [];
-
-  const choCmds = getChoCommands(choIdx, jungIdx, jongIdx, jamoLib);
-  if (choCmds.length > 0) {
-    result.push(...fitCommandsToSlot(choCmds, layout.cho));
+  if (!layout) {
+    return {
+      layout: null,
+      cho: [],
+      jung: [],
+      jong: [],
+    };
   }
 
-  const jungCmds = getJungCommands(jungIdx, jongIdx, jamoLib);
-  if (jungCmds.length > 0) {
-    result.push(...fitCommandsToSlot(jungCmds, layout.jung));
-  }
+  const cho = fitCommandsToSlot(getChoCommands(choIdx, jungIdx, jongIdx, jamoLib), layout.cho);
+  const jung = fitCommandsToSlot(getJungCommands(jungIdx, jongIdx, jamoLib), layout.jung);
+  const jong = jongIdx > 0 && layout.jong
+    ? composeJongCommands(jongIdx, jungIdx, layout, jamoLib)
+    : [];
 
-  if (jongIdx > 0 && layout.jong) {
-    const jongCommands = composeJongCommands(jongIdx, jungIdx, layout, jamoLib);
-    if (jongCommands.length > 0) {
-      result.push(...jongCommands);
-    }
-  }
+  return {
+    layout,
+    cho,
+    jung,
+    jong,
+  };
+}
 
-  return result;
+export function composeSyllable(choIdx, jungIdx, jongIdx, jamoLib) {
+  const parts = composeSyllableParts(choIdx, jungIdx, jongIdx, jamoLib);
+  return [
+    ...parts.cho,
+    ...parts.jung,
+    ...parts.jong,
+  ];
 }
 
 export function commandsToPath(commands, opentype) {

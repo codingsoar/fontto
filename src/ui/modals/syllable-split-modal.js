@@ -50,6 +50,12 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
               <button type="button" class="tool-btn" id="splitClearSelectionBtn" disabled>선택 해제</button>
               <button type="button" class="tool-btn" id="splitClearAssignmentsBtn" disabled>지정 초기화</button>
             </div>
+            <div class="template-move-tools">
+              <button type="button" class="tool-btn" id="splitMoveUpBtn" disabled>↑</button>
+              <button type="button" class="tool-btn" id="splitMoveLeftBtn" disabled>←</button>
+              <button type="button" class="tool-btn" id="splitMoveRightBtn" disabled>→</button>
+              <button type="button" class="tool-btn" id="splitMoveDownBtn" disabled>↓</button>
+            </div>
             <div class="template-apply-tools">
               <button class="gen-btn" id="splitSavePendingBtn" disabled>저장된 부분에 추가</button>
               <button class="gen-btn" id="splitApplySelectionBtn" disabled>글자 카드에 적용</button>
@@ -60,6 +66,7 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
             <canvas class="template-manual-canvas" id="splitManualCanvas" width="520" height="520"></canvas>
             <div class="template-manual-sidebar">
               <div class="template-target-list" id="splitTargetList"></div>
+              <div class="template-component-list" id="splitComponentList"></div>
               <div class="template-selection-summary" id="splitSelectionSummary">불러온 이미지가 없습니다.</div>
             </div>
           </div>
@@ -97,6 +104,9 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
     assignments: new Map(),
     selectedComponentIds: new Set(),
     contextMenuEl: null,
+    lastPointerHit: null,
+    transformDrag: null,
+    suppressNextClick: false,
     editMode: 'select',
     brushSize: 18,
     editImageData: null,
@@ -109,6 +119,7 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
   const manualStatus = document.getElementById('splitManualStatus');
   const manualCanvas = document.getElementById('splitManualCanvas');
   const targetList = document.getElementById('splitTargetList');
+  const componentList = document.getElementById('splitComponentList');
   const selectionSummary = document.getElementById('splitSelectionSummary');
   const selectModeBtn = document.getElementById('splitSelectModeBtn');
   const eraseModeBtn = document.getElementById('splitEraseModeBtn');
@@ -118,17 +129,25 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
   const assignActiveBtn = document.getElementById('splitAssignActiveBtn');
   const clearSelectionBtn = document.getElementById('splitClearSelectionBtn');
   const clearAssignmentsBtn = document.getElementById('splitClearAssignmentsBtn');
+  const moveUpBtn = document.getElementById('splitMoveUpBtn');
+  const moveLeftBtn = document.getElementById('splitMoveLeftBtn');
+  const moveRightBtn = document.getElementById('splitMoveRightBtn');
+  const moveDownBtn = document.getElementById('splitMoveDownBtn');
   const prevSourceBtn = document.getElementById('splitPrevSourceBtn');
   const nextSourceBtn = document.getElementById('splitNextSourceBtn');
   const sourceCounter = document.getElementById('splitSourceCounter');
 
   const render = () => {
-    app._renderManualSplitState(manualCanvas, targetList, selectionSummary, state, render);
+    app._renderManualSplitState(manualCanvas, targetList, selectionSummary, state, render, componentList);
     applyBtn.disabled = !app._canApplyManualSplit(state);
     savePendingBtn.disabled = !app._canApplyManualSplit(state);
     assignActiveBtn.disabled = !state.selectedComponentIds?.size || !state.targets.length || state.editMode !== 'select';
     clearSelectionBtn.disabled = !state.selectedComponentIds?.size;
     clearAssignmentsBtn.disabled = !state.assignments?.size;
+    moveUpBtn.disabled = !state.selectedComponentIds?.size || state.editMode !== 'select';
+    moveLeftBtn.disabled = !state.selectedComponentIds?.size || state.editMode !== 'select';
+    moveRightBtn.disabled = !state.selectedComponentIds?.size || state.editMode !== 'select';
+    moveDownBtn.disabled = !state.selectedComponentIds?.size || state.editMode !== 'select';
     if (sourceCounter) {
       sourceCounter.textContent = sequence.length && currentSequenceIndex >= 0
         ? `${currentSequenceIndex + 1}/${sequence.length}`
@@ -146,6 +165,9 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
     state.editImageData = imageDataFromExtractedMask(state.extracted);
     state.assignments = new Map();
     state.selectedComponentIds = new Set();
+    state.lastPointerHit = null;
+    state.transformDrag = null;
+    state.suppressNextClick = false;
     manualStatus.textContent = `획 그룹 ${state.extracted.components.length}개를 찾았습니다. 그룹을 선택하고 대상을 지정한 뒤 글자 카드에 적용하세요.`;
     render();
   };
@@ -160,6 +182,9 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
     state.activeTargetIndex = 0;
     state.assignments = new Map();
     state.selectedComponentIds = new Set();
+    state.lastPointerHit = null;
+    state.transformDrag = null;
+    state.suppressNextClick = false;
     state.contextMenuEl = null;
     state.editMode = 'select';
     syllableInput.value = slot.char;
@@ -181,6 +206,9 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
     state.activeTargetIndex = 0;
     state.assignments = new Map();
     state.selectedComponentIds = new Set();
+    state.lastPointerHit = null;
+    state.transformDrag = null;
+    state.suppressNextClick = false;
     if (!state.targets.length) {
       state.extracted = null;
       manualStatus.textContent = '가, 한 같은 한글 음절 한 글자를 입력하세요.';
@@ -198,7 +226,11 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
   manualCanvas.addEventListener('click', (event) => {
     if (state.editMode !== 'select') return;
     if (!state.extracted) return;
-    const componentId = app._getManualComponentAtPoint(event, manualCanvas, state.extracted);
+    if (state.suppressNextClick) {
+      state.suppressNextClick = false;
+      return;
+    }
+    const componentId = app._getManualComponentAtPoint(event, manualCanvas, state.extracted, state);
     if (componentId === null) return;
     app._toggleManualComponentSelection(state, componentId, event.shiftKey);
     render();
@@ -213,7 +245,14 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
   });
 
   manualCanvas.addEventListener('pointerdown', (event) => {
-    if (state.editMode === 'select') return;
+    if (state.editMode === 'select') {
+      if (event.button !== 0) return;
+      if (app._beginManualTransformDrag(state, manualCanvas, event)) {
+        manualCanvas.setPointerCapture?.(event.pointerId);
+        render();
+      }
+      return;
+    }
     event.preventDefault();
     state.isEditingMask = true;
     app._paintManualMaskAtEvent(event, manualCanvas, state);
@@ -221,13 +260,27 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
     render();
   });
   manualCanvas.addEventListener('pointermove', (event) => {
-    if (!state.isEditingMask || state.editMode === 'select') return;
+    if (state.editMode === 'select') {
+      if (state.transformDrag) {
+        event.preventDefault();
+        app._updateManualTransformDrag(state, manualCanvas, event);
+        render();
+      }
+      return;
+    }
+    if (!state.isEditingMask) return;
     event.preventDefault();
     app._paintManualMaskAtEvent(event, manualCanvas, state);
     app._reextractManualMask(state);
     render();
   });
-  window.addEventListener('pointerup', () => {
+  window.addEventListener('pointerup', (event) => {
+    if (state.transformDrag) {
+      app._endManualTransformDrag(state);
+      state.suppressNextClick = true;
+      manualCanvas.releasePointerCapture?.(event.pointerId);
+      render();
+    }
     state.isEditingMask = false;
   });
 
@@ -265,6 +318,30 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
     state.assignments = new Map();
     state.selectedComponentIds = new Set();
     manualStatus.textContent = '지정을 초기화했습니다.';
+    render();
+  });
+  moveUpBtn?.addEventListener('click', () => {
+    const moved = app._moveManualSelectedComponents(state, 0, -4);
+    if (!moved) return;
+    manualStatus.textContent = '선택한 획 그룹을 위로 이동했습니다.';
+    render();
+  });
+  moveLeftBtn?.addEventListener('click', () => {
+    const moved = app._moveManualSelectedComponents(state, -4, 0);
+    if (!moved) return;
+    manualStatus.textContent = '선택한 획 그룹을 왼쪽으로 이동했습니다.';
+    render();
+  });
+  moveRightBtn?.addEventListener('click', () => {
+    const moved = app._moveManualSelectedComponents(state, 4, 0);
+    if (!moved) return;
+    manualStatus.textContent = '선택한 획 그룹을 오른쪽으로 이동했습니다.';
+    render();
+  });
+  moveDownBtn?.addEventListener('click', () => {
+    const moved = app._moveManualSelectedComponents(state, 0, 4);
+    if (!moved) return;
+    manualStatus.textContent = '선택한 획 그룹을 아래로 이동했습니다.';
     render();
   });
   brushSizeInput?.addEventListener('input', () => {

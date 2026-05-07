@@ -5,7 +5,9 @@
  * main.js, preview-panel.js, and other modules.
  */
 
-import { composeSyllable } from './composer.js';
+import { composeSyllable, composeSyllableParts } from './composer.js';
+
+const SYLLABLE_OVERRIDE_STORAGE_KEY = 'fontto-syllable-overrides-v1';
 
 /**
  * Decompose a Hangul syllable character into cho/jung/jong indices.
@@ -32,6 +34,88 @@ export function decomposeChar(char) {
  */
 export function composeSyllableFromLib(cho, jung, jong, jamoLib) {
   return composeSyllable(cho, jung, jong, jamoLib);
+}
+
+export function loadSyllableOverrides() {
+  try {
+    const raw = localStorage.getItem(SYLLABLE_OVERRIDE_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function saveSyllableOverrides(overrides) {
+  try {
+    localStorage.setItem(SYLLABLE_OVERRIDE_STORAGE_KEY, JSON.stringify(overrides));
+  } catch (error) {
+    console.warn('Failed to save syllable overrides:', error);
+  }
+}
+
+export function applyOverrideToCommands(commands, override) {
+  if (!override || !commands?.length) return commands;
+  const { dx = 0, dy = 0, sx = 1, sy = 1 } = override;
+  if (dx === 0 && dy === 0 && sx === 1 && sy === 1) return commands;
+
+  let sumX = 0;
+  let sumY = 0;
+  let count = 0;
+  for (const cmd of commands) {
+    if (cmd.x !== undefined && cmd.y !== undefined) {
+      sumX += cmd.x;
+      sumY += cmd.y;
+      count += 1;
+    }
+  }
+  const cx = count > 0 ? sumX / count : 500;
+  const cy = count > 0 ? sumY / count : 500;
+
+  const transform = (x, y) => ({
+    x: Math.round((x - cx) * sx + cx + dx),
+    y: Math.round((y - cy) * sy + cy + dy),
+  });
+
+  return commands.map((cmd) => {
+    const next = { type: cmd.type };
+    if (cmd.x !== undefined && cmd.y !== undefined) {
+      const point = transform(cmd.x, cmd.y);
+      next.x = point.x;
+      next.y = point.y;
+    }
+    if (cmd.x1 !== undefined && cmd.y1 !== undefined) {
+      const point = transform(cmd.x1, cmd.y1);
+      next.x1 = point.x;
+      next.y1 = point.y;
+    }
+    if (cmd.x2 !== undefined && cmd.y2 !== undefined) {
+      const point = transform(cmd.x2, cmd.y2);
+      next.x2 = point.x;
+      next.y2 = point.y;
+    }
+    return next;
+  });
+}
+
+export function composeSyllableWithOverride(cho, jung, jong, jamoLib, override = null) {
+  const commands = composeSyllable(cho, jung, jong, jamoLib);
+  if (!override) return commands;
+
+  const parts = composeSyllableParts(cho, jung, jong, jamoLib);
+  const transformed = [
+    ...applyOverrideToCommands(parts.cho, override.cho),
+    ...applyOverrideToCommands(parts.jung, override.jung),
+    ...applyOverrideToCommands(parts.jong, override.jong),
+  ];
+
+  return transformed.length > 0 ? transformed : commands;
+}
+
+export function composeCharFromLib(char, jamoLib, overridesMap = null) {
+  const info = decomposeChar(char);
+  if (!info) return [];
+  const overrides = overridesMap ?? loadSyllableOverrides();
+  return composeSyllableWithOverride(info.cho, info.jung, info.jong, jamoLib, overrides?.[char] || null);
 }
 
 /**

@@ -29,7 +29,7 @@ import { renderPdfFileToCanvases } from './core/pdf-renderer.js';
 import { buildTemplatePdfBytes } from './core/template-pdf.js';
 import { CHO, JUNG, JONG, compose, getVowelCategory, getJongInfo } from './core/hangul.js';
 import { loadState, saveState } from './core/storage.js';
-import { decomposeChar, composeSyllableFromLib, drawGlyphOnCtx, drawPathCommands, createGlyphCanvas, createPartPreviewCanvas } from './core/glyph-utils.js';
+import { decomposeChar, composeSyllableFromLib, composeCharFromLib, drawGlyphOnCtx, drawPathCommands, createGlyphCanvas, createPartPreviewCanvas } from './core/glyph-utils.js';
 import { showToast } from './ui/toast.js';
 import { showPreviewModal } from './ui/modals/preview-modal.js';
 import { showGenerateModal } from './ui/modals/generate-modal.js';
@@ -105,9 +105,9 @@ class FonttoApp {
           <p class="landing-subtitle">내 손글씨를 한글 폰트로 만들어보세요.</p>
           <div class="landing-features">
             <div class="feature-card">
-              <span class="feature-icon">62</span>
-              <h3>자모 62개 쓰기</h3>
-              <p>필수 자음과 모음을 완성하면 나머지 글자는 자동으로 생성됩니다.</p>
+              <span class="feature-icon">${REQUIRED_JAMO_COUNT}</span>
+              <h3>맥락별 자모 ${REQUIRED_JAMO_COUNT}개 쓰기</h3>
+              <p>같은 자모도 모음 방향·받침 유무에 따라 모양이 달라집니다. 맥락별로 한 번씩 쓰면 나머지 글자는 자동 생성됩니다.</p>
             </div>
             <div class="feature-card">
               <span class="feature-icon">AI</span>
@@ -644,11 +644,15 @@ class FonttoApp {
   }
 
   _handleGlyphCardOpen(char, meta = {}) {
+    if (meta.composed) {
+      showSyllableEditorModal(this, char);
+      return;
+    }
     if (meta.imported || this.syllableImports?.[char]?.imageSrc) {
       showSyllableSplitModal(this, char);
       return;
     }
-    this._jumpToGlyphEdit(char);
+    showSyllableEditorModal(this, char);
   }
 
   _getCurrentDrawingSelection() {
@@ -896,9 +900,7 @@ class FonttoApp {
 
     pageChars.forEach((char) => {
       const info = decomposeChar(char);
-      const commands = info
-        ? composeSyllableFromLib(info.cho, info.jung, info.jong, jamoLib)
-        : [];
+      const commands = composeCharFromLib(char, jamoLib);
       const button = document.createElement('button');
       button.className = `review-glyph-card ${char === state.selectedChar ? 'active' : ''}`;
       button.title = char;
@@ -923,7 +925,7 @@ class FonttoApp {
       return;
     }
 
-    const commands = composeSyllableFromLib(info.cho, info.jung, info.jong, jamoLib);
+    const commands = composeCharFromLib(char, jamoLib);
     const editTargets = this._getEditTargetsForSyllable(info.cho, info.jung, info.jong);
 
     container.innerHTML = '';
@@ -1258,6 +1260,7 @@ class FonttoApp {
       assignments: new Map(),
       selectedComponentIds: new Set(),
       contextMenuEl: null,
+      lastPointerHit: null,
     };
 
     document.getElementById('closeTemplateModal').addEventListener('click', close);
@@ -1320,7 +1323,7 @@ class FonttoApp {
 
     manualCanvas.addEventListener('click', (event) => {
       if (!manualState.extracted) return;
-      const componentId = this._getManualComponentAtPoint(event, manualCanvas, manualState.extracted);
+      const componentId = this._getManualComponentAtPoint(event, manualCanvas, manualState.extracted, manualState);
       if (componentId === null) return;
 
       this._toggleManualComponentSelection(manualState, componentId, event.shiftKey);
@@ -1428,6 +1431,7 @@ class FonttoApp {
       assignments: new Map(),
       selectedComponentIds: new Set(),
       contextMenuEl: null,
+      lastPointerHit: null,
       editMode: 'select',
       brushSize: 18,
       editImageData: null,
@@ -1486,7 +1490,7 @@ class FonttoApp {
     manualCanvas.addEventListener('click', (event) => {
       if (state.editMode !== 'select') return;
       if (!state.extracted) return;
-      const componentId = this._getManualComponentAtPoint(event, manualCanvas, state.extracted);
+      const componentId = this._getManualComponentAtPoint(event, manualCanvas, state.extracted, state);
       if (componentId === null) return;
       this._toggleManualComponentSelection(state, componentId, event.shiftKey);
       render();
@@ -1884,6 +1888,95 @@ class FonttoApp {
     state.selectedComponentIds = new Set();
   }
 
+  _moveManualSelectedComponents(state, dx, dy) {
+    if (!state?.editImageData || !state?.extracted || !state.selectedComponentIds?.size) return false;
+    const width = state.editImageData.width;
+    const height = state.editImageData.height;
+    if (!width || !height) return false;
+
+    const oldComponents = state.extracted.components.map((component) => ({
+      id: component.id,
+      pixels: [...component.pixels],
+      bounds: { ...component.bounds },
+      centerX: component.bounds.minX + component.bounds.w / 2,
+      centerY: component.bounds.minY + component.bounds.h / 2,
+      assignedTarget: state.assignments.get(component.id),
+      selected: state.selectedComponentIds.has(component.id),
+    }));
+    const selectedIds = new Set([...state.selectedComponentIds]);
+    const data = state.editImageData.data;
+    const movedPixels = new Set();
+
+    oldComponents.forEach((component) => {
+      if (!selectedIds.has(component.id)) return;
+      component.pixels.forEach((pixelIndex) => {
+        const idx = pixelIndex * 4;
+        data[idx] = 0;
+        data[idx + 1] = 0;
+        data[idx + 2] = 0;
+        data[idx + 3] = 0;
+
+        const px = pixelIndex % width;
+        const py = Math.floor(pixelIndex / width);
+        const nextX = Math.max(0, Math.min(width - 1, px + dx));
+        const nextY = Math.max(0, Math.min(height - 1, py + dy));
+        movedPixels.add((nextY * width) + nextX);
+      });
+    });
+
+    movedPixels.forEach((pixelIndex) => {
+      const idx = pixelIndex * 4;
+      data[idx] = 255;
+      data[idx + 1] = 255;
+      data[idx + 2] = 255;
+      data[idx + 3] = 255;
+    });
+
+    const extracted = extractRasterComponents(state.editImageData);
+    state.extracted = extracted;
+    state.lastPointerHit = null;
+
+    const available = [...extracted.components].map((component) => ({
+      component,
+      centerX: component.bounds.minX + component.bounds.w / 2,
+      centerY: component.bounds.minY + component.bounds.h / 2,
+      taken: false,
+    }));
+    const nextAssignments = new Map();
+    const nextSelected = new Set();
+    const oldOrdered = [...oldComponents].sort((a, b) => {
+      if (a.selected !== b.selected) return a.selected ? -1 : 1;
+      return a.id - b.id;
+    });
+
+    oldOrdered.forEach((oldComponent) => {
+      let best = null;
+      let bestDistance = Number.POSITIVE_INFINITY;
+      available.forEach((candidate) => {
+        if (candidate.taken) return;
+        const distance = Math.abs(candidate.centerX - (oldComponent.centerX + (oldComponent.selected ? dx : 0)))
+          + Math.abs(candidate.centerY - (oldComponent.centerY + (oldComponent.selected ? dy : 0)));
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          best = candidate;
+        }
+      });
+
+      if (!best) return;
+      best.taken = true;
+      if (oldComponent.assignedTarget !== undefined) {
+        nextAssignments.set(best.component.id, oldComponent.assignedTarget);
+      }
+      if (oldComponent.selected) {
+        nextSelected.add(best.component.id);
+      }
+    });
+
+    state.assignments = nextAssignments;
+    state.selectedComponentIds = nextSelected;
+    return true;
+  }
+
   _autoAssignManualSplitTargets(state) {
     if (!state.extracted || !state.targets.length) {
       return { assigned: 0, needsReview: 0 };
@@ -1963,8 +2056,9 @@ class FonttoApp {
       && cy <= target.y + target.h;
   }
 
-  _renderManualSplitState(canvas, targetList, selectionSummary, state, rerender) {
+  _renderManualSplitState(canvas, targetList, selectionSummary, state, rerender, componentList = null) {
     this._renderManualTargetList(targetList, state, rerender);
+    this._renderManualComponentList(componentList, state, rerender);
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = '#0f1018';
@@ -2018,6 +2112,8 @@ class FonttoApp {
       );
     });
 
+    this._drawManualSelectionBounds(ctx, state);
+
     const selectedCount = state.selectedComponentIds?.size ?? 0;
     const totalAssigned = state.assignments.size;
     const modeText = state.editMode === 'erase'
@@ -2062,10 +2158,118 @@ class FonttoApp {
     });
   }
 
+  _renderManualComponentList(componentList, state, rerender) {
+    if (!componentList) return;
+
+    componentList.innerHTML = '';
+    if (!state.extracted?.components?.length) {
+      componentList.innerHTML = '<div class="template-target-empty">겹친 획은 여기서 직접 선택할 수 있습니다.</div>';
+      return;
+    }
+
+    const title = document.createElement('div');
+    title.className = 'template-component-list-title';
+    title.textContent = '획 그룹 선택';
+    componentList.appendChild(title);
+
+    const list = document.createElement('div');
+    list.className = 'template-component-list-grid';
+    const components = [...state.extracted.components].sort((a, b) => {
+      const rowDiff = a.bounds.minY - b.bounds.minY;
+      if (Math.abs(rowDiff) > 24) return rowDiff;
+      return a.bounds.minX - b.bounds.minX;
+    });
+
+    components.forEach((component, index) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      const targetIndex = state.assignments.get(component.id);
+      const target = targetIndex !== undefined ? state.targets[targetIndex] : null;
+      const isSelected = state.selectedComponentIds?.has(component.id);
+      button.className = `tool-btn template-component-btn ${isSelected ? 'active' : ''} ${target ? 'completed' : ''}`;
+      button.textContent = target
+        ? `그룹 ${index + 1} -> ${target.jamo}`
+        : `그룹 ${index + 1}`;
+      button.title = `크기 ${component.bounds.w}x${component.bounds.h}`;
+      button.addEventListener('click', (event) => {
+        this._toggleManualComponentSelection(state, component.id, event.shiftKey);
+        rerender?.();
+      });
+      list.appendChild(button);
+    });
+
+    componentList.appendChild(list);
+  }
+
   _isTargetStored(target) {
     const selection = this._getSelectionForTarget(target.categoryId, target.jamo);
     if (!selection) return false;
     return this._getStorageKeysForSelection(selection).some((key) => this.jamoLib[key]?.length);
+  }
+
+  _drawManualSelectionBounds(ctx, state) {
+    const bounds = this._getManualSelectedBounds(state);
+    if (!bounds) return;
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255, 184, 77, 0.95)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 6]);
+    ctx.strokeRect(bounds.minX - 6, bounds.minY - 6, bounds.w + 12, bounds.h + 12);
+    ctx.setLineDash([]);
+
+    const handles = this._getManualTransformHandles(bounds);
+    handles.forEach((handle) => {
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+      ctx.strokeStyle = 'rgba(255, 184, 77, 1)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.rect(handle.x - 5, handle.y - 5, 10, 10);
+      ctx.fill();
+      ctx.stroke();
+    });
+    ctx.restore();
+  }
+
+  _getManualSelectedBounds(state) {
+    const selected = state?.extracted?.components?.filter((component) => state.selectedComponentIds?.has(component.id));
+    if (!selected?.length) return null;
+
+    const bounds = selected.reduce((acc, component) => ({
+      minX: Math.min(acc.minX, component.bounds.minX),
+      minY: Math.min(acc.minY, component.bounds.minY),
+      maxX: Math.max(acc.maxX, component.bounds.maxX),
+      maxY: Math.max(acc.maxY, component.bounds.maxY),
+    }), {
+      minX: Number.POSITIVE_INFINITY,
+      minY: Number.POSITIVE_INFINITY,
+      maxX: Number.NEGATIVE_INFINITY,
+      maxY: Number.NEGATIVE_INFINITY,
+    });
+
+    return {
+      minX: bounds.minX,
+      minY: bounds.minY,
+      maxX: bounds.maxX,
+      maxY: bounds.maxY,
+      w: bounds.maxX - bounds.minX,
+      h: bounds.maxY - bounds.minY,
+    };
+  }
+
+  _getManualTransformHandles(bounds) {
+    const padded = {
+      minX: bounds.minX - 6,
+      minY: bounds.minY - 6,
+      maxX: bounds.maxX + 6,
+      maxY: bounds.maxY + 6,
+    };
+    return [
+      { type: 'nw', x: padded.minX, y: padded.minY },
+      { type: 'ne', x: padded.maxX, y: padded.minY },
+      { type: 'sw', x: padded.minX, y: padded.maxY },
+      { type: 'se', x: padded.maxX, y: padded.maxY },
+    ];
   }
 
   _toggleManualComponentSelection(state, componentId, additive = false) {
@@ -2095,10 +2299,200 @@ class FonttoApp {
     this._hideManualContextMenu(state);
   }
 
+  _getManualCanvasPoint(event, canvas) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: (event.clientX - rect.left) * (canvas.width / rect.width),
+      y: (event.clientY - rect.top) * (canvas.height / rect.height),
+    };
+  }
+
+  _beginManualTransformDrag(state, canvas, event) {
+    if (!state?.selectedComponentIds?.size) return false;
+
+    const point = this._getManualCanvasPoint(event, canvas);
+    const bounds = this._getManualSelectedBounds(state);
+    if (!bounds) return false;
+
+    const handle = this._getManualTransformHandleAtPoint(point, bounds);
+    const inside = point.x >= bounds.minX - 6
+      && point.x <= bounds.maxX + 6
+      && point.y >= bounds.minY - 6
+      && point.y <= bounds.maxY + 6;
+    const mode = handle || (inside ? 'move' : null);
+    if (!mode) return false;
+
+    event.preventDefault();
+    state.transformDrag = {
+      mode,
+      startPoint: point,
+      startBounds: { ...bounds },
+      snapshot: this._captureManualTransformSnapshot(state),
+      moved: false,
+    };
+    return true;
+  }
+
+  _updateManualTransformDrag(state, canvas, event) {
+    if (!state?.transformDrag) return;
+    const point = this._getManualCanvasPoint(event, canvas);
+    const drag = state.transformDrag;
+    const dx = point.x - drag.startPoint.x;
+    const dy = point.y - drag.startPoint.y;
+    drag.moved = drag.moved || Math.abs(dx) > 1 || Math.abs(dy) > 1;
+
+    if (drag.mode === 'move') {
+      this._applyManualTransformSnapshot(state, drag.snapshot, {
+        translateX: dx,
+        translateY: dy,
+        scaleX: 1,
+        scaleY: 1,
+        anchorX: drag.startBounds.minX + (drag.startBounds.maxX - drag.startBounds.minX) / 2,
+        anchorY: drag.startBounds.minY + (drag.startBounds.maxY - drag.startBounds.minY) / 2,
+      });
+      return;
+    }
+
+    const startWidth = Math.max(drag.startBounds.maxX - drag.startBounds.minX + 1, 1);
+    const startHeight = Math.max(drag.startBounds.maxY - drag.startBounds.minY + 1, 1);
+    const signX = drag.mode.includes('w') ? -1 : 1;
+    const signY = drag.mode.includes('n') ? -1 : 1;
+    const scaleX = Math.max(0.2, (startWidth + dx * signX) / startWidth);
+    const scaleY = Math.max(0.2, (startHeight + dy * signY) / startHeight);
+    const anchorX = drag.mode.includes('w') ? drag.startBounds.maxX : drag.startBounds.minX;
+    const anchorY = drag.mode.includes('n') ? drag.startBounds.maxY : drag.startBounds.minY;
+
+    this._applyManualTransformSnapshot(state, drag.snapshot, {
+      translateX: 0,
+      translateY: 0,
+      scaleX,
+      scaleY,
+      anchorX,
+      anchorY,
+    });
+  }
+
+  _endManualTransformDrag(state) {
+    if (!state?.transformDrag) return;
+    state.transformDrag = null;
+    state.lastPointerHit = null;
+  }
+
+  _getManualTransformHandleAtPoint(point, bounds) {
+    const threshold = 12;
+    for (const handle of this._getManualTransformHandles(bounds)) {
+      if (Math.abs(point.x - handle.x) <= threshold && Math.abs(point.y - handle.y) <= threshold) {
+        return handle.type;
+      }
+    }
+    return null;
+  }
+
+  _captureManualTransformSnapshot(state) {
+    return {
+      imageData: new ImageData(new Uint8ClampedArray(state.editImageData.data), state.editImageData.width, state.editImageData.height),
+      components: state.extracted.components.map((component) => ({
+        id: component.id,
+        pixels: [...component.pixels],
+        bounds: { ...component.bounds },
+        centerX: component.bounds.minX + component.bounds.w / 2,
+        centerY: component.bounds.minY + component.bounds.h / 2,
+        assignedTarget: state.assignments.get(component.id),
+        selected: state.selectedComponentIds.has(component.id),
+      })),
+    };
+  }
+
+  _applyManualTransformSnapshot(state, snapshot, transform) {
+    const nextImageData = new ImageData(new Uint8ClampedArray(snapshot.imageData.data), snapshot.imageData.width, snapshot.imageData.height);
+    const { width, height, data } = nextImageData;
+    const movedPixels = new Set();
+
+    snapshot.components.forEach((component) => {
+      if (!component.selected) return;
+      component.pixels.forEach((pixelIndex) => {
+        const idx = pixelIndex * 4;
+        data[idx] = 0;
+        data[idx + 1] = 0;
+        data[idx + 2] = 0;
+        data[idx + 3] = 0;
+
+        const px = pixelIndex % width;
+        const py = Math.floor(pixelIndex / width);
+        const scaledX = (px - transform.anchorX) * transform.scaleX + transform.anchorX + transform.translateX;
+        const scaledY = (py - transform.anchorY) * transform.scaleY + transform.anchorY + transform.translateY;
+        const nextX = Math.round(Math.max(0, Math.min(width - 1, scaledX)));
+        const nextY = Math.round(Math.max(0, Math.min(height - 1, scaledY)));
+        movedPixels.add((nextY * width) + nextX);
+      });
+    });
+
+    movedPixels.forEach((pixelIndex) => {
+      const idx = pixelIndex * 4;
+      data[idx] = 255;
+      data[idx + 1] = 255;
+      data[idx + 2] = 255;
+      data[idx + 3] = 255;
+    });
+
+    state.editImageData = nextImageData;
+    this._restoreManualTransformedComponents(state, snapshot, transform);
+  }
+
+  _restoreManualTransformedComponents(state, snapshot, transform) {
+    const extracted = extractRasterComponents(state.editImageData);
+    state.extracted = extracted;
+
+    const available = extracted.components.map((component) => ({
+      component,
+      centerX: component.bounds.minX + component.bounds.w / 2,
+      centerY: component.bounds.minY + component.bounds.h / 2,
+      taken: false,
+    }));
+    const nextAssignments = new Map();
+    const nextSelected = new Set();
+    const ordered = [...snapshot.components].sort((a, b) => {
+      if (a.selected !== b.selected) return a.selected ? -1 : 1;
+      return a.id - b.id;
+    });
+
+    ordered.forEach((oldComponent) => {
+      const expectedX = oldComponent.selected
+        ? (oldComponent.centerX - transform.anchorX) * transform.scaleX + transform.anchorX + transform.translateX
+        : oldComponent.centerX;
+      const expectedY = oldComponent.selected
+        ? (oldComponent.centerY - transform.anchorY) * transform.scaleY + transform.anchorY + transform.translateY
+        : oldComponent.centerY;
+
+      let best = null;
+      let bestDistance = Number.POSITIVE_INFINITY;
+      available.forEach((candidate) => {
+        if (candidate.taken) return;
+        const distance = Math.abs(candidate.centerX - expectedX) + Math.abs(candidate.centerY - expectedY);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          best = candidate;
+        }
+      });
+
+      if (!best) return;
+      best.taken = true;
+      if (oldComponent.assignedTarget !== undefined) {
+        nextAssignments.set(best.component.id, oldComponent.assignedTarget);
+      }
+      if (oldComponent.selected) {
+        nextSelected.add(best.component.id);
+      }
+    });
+
+    state.assignments = nextAssignments;
+    state.selectedComponentIds = nextSelected;
+  }
+
   _handleManualCanvasContextMenu(event, canvas, state, rerender) {
     if (!state.extracted) return;
     event.preventDefault();
-    const componentId = this._getManualComponentAtPoint(event, canvas, state.extracted);
+    const componentId = this._getManualComponentAtPoint(event, canvas, state.extracted, state);
     if (componentId !== null && !state.selectedComponentIds.has(componentId)) {
       this._toggleManualComponentSelection(state, componentId, event.shiftKey);
       rerender?.();
@@ -2134,19 +2528,43 @@ class FonttoApp {
     state.contextMenuEl = null;
   }
 
-  _getManualComponentAtPoint(event, canvas, extracted) {
+  _getManualComponentAtPoint(event, canvas, extracted, state = null) {
     const rect = canvas.getBoundingClientRect();
     const x = Math.floor((event.clientX - rect.left) * (canvas.width / rect.width));
     const y = Math.floor((event.clientY - rect.top) * (canvas.height / rect.height));
 
-    const hit = extracted.components.find((component) => (
-      x >= component.bounds.minX &&
-      x <= component.bounds.maxX &&
-      y >= component.bounds.minY &&
-      y <= component.bounds.maxY
-    ));
+    const hits = extracted.components
+      .filter((component) => (
+        x >= component.bounds.minX &&
+        x <= component.bounds.maxX &&
+        y >= component.bounds.minY &&
+        y <= component.bounds.maxY
+      ))
+      .sort((a, b) => {
+        const aArea = a.bounds.w * a.bounds.h;
+        const bArea = b.bounds.w * b.bounds.h;
+        if (aArea !== bArea) return aArea - bArea;
 
-    return hit ? hit.id : null;
+        const aCenterDistance = Math.abs(x - (a.bounds.minX + a.bounds.maxX) / 2) + Math.abs(y - (a.bounds.minY + a.bounds.maxY) / 2);
+        const bCenterDistance = Math.abs(x - (b.bounds.minX + b.bounds.maxX) / 2) + Math.abs(y - (b.bounds.minY + b.bounds.maxY) / 2);
+        return aCenterDistance - bCenterDistance;
+      });
+
+    if (!hits.length) {
+      if (state) state.lastPointerHit = null;
+      return null;
+    }
+
+    if (!state || hits.length === 1) {
+      return hits[0].id;
+    }
+
+    const key = `${x}:${y}:${hits.map((component) => component.id).join(',')}`;
+    const nextIndex = state.lastPointerHit?.key === key
+      ? (state.lastPointerHit.index + 1) % hits.length
+      : 0;
+    state.lastPointerHit = { key, index: nextIndex };
+    return hits[nextIndex].id;
   }
 
   _applyManualSplitAssignments(state) {
@@ -2212,11 +2630,7 @@ class FonttoApp {
       this._pushHistorySnapshot(historySnapshot, '글자 카드에 부분 적용');
       this._checkGenerateReady();
       this._renderPendingPartsPanel();
-      const affectedChars = this._getAffectedCharsForTargets(appliedTargets);
-      if (affectedChars[0]) {
-        this.browserPanel?.focusBrowserChar(affectedChars[0]);
-        this.templateBrowserPanel?.focusBrowserChar(affectedChars[0]);
-      }
+      this._focusAppliedGlyphCard(state.char, appliedTargets);
       showToast(`일치하는 글자 카드에 부분 ${applied}개를 적용했습니다.`, 'success', 2600);
     }
 
@@ -2346,6 +2760,16 @@ class FonttoApp {
     return chars;
   }
 
+  _focusAppliedGlyphCard(preferredChar = '', targets = []) {
+    const focusChar = decomposeChar(preferredChar)
+      ? preferredChar
+      : this._getAffectedCharsForTargets(targets)[0];
+    if (!focusChar) return;
+
+    this.browserPanel?.focusBrowserChar(focusChar);
+    this.templateBrowserPanel?.focusBrowserChar(focusChar);
+  }
+
   _storePendingSelection(selection, commands, strokes, sourceChar = '') {
     const key = `${selection.categoryId}_${selection.jamo}`;
     this.pendingParts[key] = {
@@ -2387,11 +2811,8 @@ class FonttoApp {
     this._checkGenerateReady();
     this._renderPendingPartsPanel();
 
-    const affectedChars = this._getAffectedCharsForTargets(appliedTargets);
-    if (affectedChars[0]) {
-      this.browserPanel?.focusBrowserChar(affectedChars[0]);
-      this.templateBrowserPanel?.focusBrowserChar(affectedChars[0]);
-    }
+    const sourceChar = parts.length === 1 ? parts[0]?.sourceChar : '';
+    this._focusAppliedGlyphCard(sourceChar, appliedTargets);
     showToast(`저장된 부분 ${parts.length}개를 글자에 적용했습니다.`, 'success', 3000);
   }
 
@@ -2524,7 +2945,7 @@ class FonttoApp {
         const info = decomposeChar(char);
         if (!info) continue;
 
-        const commands = composeSyllableFromLib(info.cho, info.jung, info.jong, jamoLib);
+        const commands = composeCharFromLib(char, jamoLib);
         drawGlyphOnCtx(ctx, commands, x, y, cellSize);
       }
     }
@@ -2543,6 +2964,16 @@ class FonttoApp {
     if (this.previewPanel) this.previewPanel.resize();
     if (this.browserPanel) this.browserPanel.resize();
     if (this.templateBrowserPanel) this.templateBrowserPanel.resize();
+  }
+
+  _refreshGlyphViews() {
+    const fullLib = deriveAll(this.jamoLib);
+    this.previewPanel?.updateJamoLib(fullLib);
+    this.browserPanel?.updateJamoLib(fullLib);
+    this.templateBrowserPanel?.updateJamoLib(fullLib);
+    this.previewPanel?.updateSyllableImports(this.syllableImports);
+    this.browserPanel?.updateSyllableImports(this.syllableImports);
+    this.templateBrowserPanel?.updateSyllableImports(this.syllableImports);
   }
 
   _persistState() {

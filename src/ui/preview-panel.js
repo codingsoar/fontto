@@ -1,5 +1,5 @@
 ﻿import { compose, decompose, CHO, JUNG, JONG, getVowelCategory } from '../core/hangul.js';
-import { composeSyllable } from '../core/composer.js';
+import { loadSyllableOverrides, composeCharFromLib } from '../core/glyph-utils.js';
 
 export class PreviewPanel {
   constructor(container, options = {}) {
@@ -21,6 +21,7 @@ export class PreviewPanel {
     this.browserPageLabel = null;
     this.browserInput = null;
     this.importImageCache = new Map();
+    this.syllableOverrides = loadSyllableOverrides();
     this._build();
   }
 
@@ -145,12 +146,14 @@ export class PreviewPanel {
 
   updateJamoLib(jamoLib) {
     this.jamoLib = jamoLib;
+    this.syllableOverrides = loadSyllableOverrides();
     this._renderPreview();
     this._renderBrowser();
   }
 
   updateSyllableImports(syllableImports = {}) {
     this.syllableImports = syllableImports;
+    this.syllableOverrides = loadSyllableOverrides();
     this.importImageCache.clear();
     Object.entries(this.syllableImports).forEach(([char, imported]) => {
       if (!imported?.imageSrc) return;
@@ -283,7 +286,10 @@ export class PreviewPanel {
         if (this.previewInput) {
           this.previewInput.value = char;
         }
-        this.options.onOpenGlyph?.(char, { imported: Boolean(imported?.imageSrc) });
+        this.options.onOpenGlyph?.(char, {
+          imported: Boolean(imported?.imageSrc),
+          composed: hasComposedGlyph,
+        });
         this._renderPreview();
         this._renderBrowser();
       });
@@ -352,10 +358,7 @@ export class PreviewPanel {
   }
 
   _getComposedCommands(char) {
-    const info = decompose(char);
-    return info
-      ? composeSyllable(info.cho, info.jung, info.jong, this.jamoLib)
-      : [];
+    return composeCharFromLib(char, this.jamoLib, this.syllableOverrides);
   }
 
   _getRequiredKeysForChar(char) {

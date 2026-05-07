@@ -1877,6 +1877,36 @@ body {
   gap: 8px;
 }
 
+.template-component-list {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.template-component-list-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.template-component-list-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.template-component-btn {
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.template-component-btn.completed {
+  border-color: rgba(0, 212, 170, 0.35);
+  background: rgba(0, 212, 170, 0.08);
+}
+
 .template-target-btn {
   justify-content: flex-start;
   text-align: left;
@@ -1885,6 +1915,12 @@ body {
 .template-target-btn.completed {
   border-color: rgba(0, 212, 170, 0.35);
   background: rgba(0, 212, 170, 0.08);
+}
+
+.template-move-tools {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .template-target-empty,

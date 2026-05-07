@@ -7,7 +7,7 @@
 
 import { decomposeChar, composeSyllableFromLib, drawGlyphOnCtx } from '../../core/glyph-utils.js';
 import { deriveAll } from '../../core/jamo-derive.js';
-import { composeSyllable, getCompositionLayout } from '../../core/composer.js';
+import { composeSyllable, composeSyllableParts } from '../../core/composer.js';
 import { showToast } from '../toast.js';
 
 const OVERRIDE_STORAGE_KEY = 'fontto-syllable-overrides-v1';
@@ -179,6 +179,7 @@ export function showSyllableEditorModal(app, char) {
   document.getElementById('syllableEditorSaveBtn').addEventListener('click', () => {
     overrides[char] = { ...current };
     saveOverrides(overrides);
+    app?._refreshGlyphViews?.();
     showToast(`${char} 조정값을 저장했습니다.`, 'success', 2000);
     render();
   });
@@ -227,21 +228,13 @@ function renderPreview(ctx, info, fullLib, overrides) {
   ctx.lineTo(size, size / 2);
   ctx.stroke();
 
-  // Compose with overrides
   const commands = composeSyllable(info.cho, info.jung, info.jong, fullLib);
-  // For now, apply a simple global override render
-  // In future, we can split composition into parts for per-part override
-  const layout = getCompositionLayout(info.jung, info.jong);
-  
-  // Apply cho override
-  const choCommands = getPartCommands(commands, layout, 'cho');
-  const jungCommands = getPartCommands(commands, layout, 'jung');
-  const jongCommands = getPartCommands(commands, layout, 'jong');
+  const parts = composeSyllableParts(info.cho, info.jung, info.jong, fullLib);
 
   const allCommands = [
-    ...applyOverrideToCommands(choCommands, overrides.cho),
-    ...applyOverrideToCommands(jungCommands, overrides.jung),
-    ...applyOverrideToCommands(jongCommands, overrides.jong),
+    ...applyOverrideToCommands(parts.cho, overrides.cho),
+    ...applyOverrideToCommands(parts.jung, overrides.jung),
+    ...applyOverrideToCommands(parts.jong, overrides.jong),
   ];
 
   if (allCommands.length > 0) {
@@ -252,38 +245,3 @@ function renderPreview(ctx, info, fullLib, overrides) {
   }
 }
 
-/**
- * Simple heuristic to split commands into parts based on Y position.
- * Not perfect, but good enough for offset preview.
- */
-function getPartCommands(commands, layout, part) {
-  if (!layout?.[part] || !commands?.length) return [];
-  
-  const slot = layout[part];
-  const slotTop = (1 - slot.y) * 1000;
-  const slotBottom = (1 - (slot.y + slot.h)) * 1000;
-  const slotLeft = slot.x * 1000;
-  const slotRight = (slot.x + slot.w) * 1000;
-  const cx = (slotLeft + slotRight) / 2;
-  const cy = (slotTop + slotBottom) / 2;
-
-  const result = [];
-  let inRange = false;
-  
-  for (const cmd of commands) {
-    if (cmd.type === 'M') {
-      // Check if this contour starts within this slot
-      const x = cmd.x ?? 0;
-      const y = cmd.y ?? 0;
-      const distX = Math.abs(x - cx) / Math.max(slotRight - slotLeft, 1);
-      const distY = Math.abs(y - cy) / Math.max(slotTop - slotBottom, 1);
-      inRange = distX < 0.8 && distY < 0.8;
-    }
-    
-    if (inRange) {
-      result.push(cmd);
-    }
-  }
-  
-  return result;
-}

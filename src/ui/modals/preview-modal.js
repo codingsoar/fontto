@@ -4,7 +4,7 @@
 
 import {
   decomposeChar,
-  composeSyllableFromLib,
+  composeCharFromLib,
   drawGlyphOnCtx,
   getCommandBounds,
 } from '../../core/glyph-utils.js';
@@ -141,7 +141,7 @@ function renderPreviewText(text, container, jamoLib, options = {}) {
       const info = decomposeChar(char);
       if (!info) continue;
 
-      const commands = composeSyllableFromLib(info.cho, info.jung, info.jong, jamoLib);
+      const commands = composeCharFromLib(char, jamoLib);
       drawGlyphOnCtx(ctx, commands, x, y, cellSize);
     }
   }
@@ -153,9 +153,7 @@ function buildLineLayout(line, jamoLib, cellSize, gap, options) {
   const items = [];
   const glyphs = Array.from(line).map((char) => {
     const info = decomposeChar(char);
-    const commands = info
-      ? composeSyllableFromLib(info.cho, info.jung, info.jong, jamoLib)
-      : [];
+    const commands = composeCharFromLib(char, jamoLib);
     return {
       char,
       bounds: getCommandBounds(commands),

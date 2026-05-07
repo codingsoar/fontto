@@ -5,7 +5,7 @@
 import { compose } from '../../core/hangul.js';
 import {
   decomposeChar,
-  composeSyllableFromLib,
+  composeCharFromLib,
   createGlyphCanvas,
 } from '../../core/glyph-utils.js';
 import { deriveAll } from '../../core/jamo-derive.js';
@@ -320,9 +320,7 @@ function renderReviewPage(gridEl, inspectorEl, pageLabelEl, state, jamoLib, app)
 
   pageChars.forEach((char) => {
     const info = decomposeChar(char);
-    const commands = info
-      ? composeSyllableFromLib(info.cho, info.jung, info.jong, jamoLib)
-      : [];
+    const commands = composeCharFromLib(char, jamoLib);
     const button = document.createElement('button');
     button.className = `review-glyph-card ${char === state.selectedChar ? 'active' : ''}`;
     button.title = char;
@@ -347,7 +345,7 @@ function renderReviewInspector(container, char, jamoLib, app) {
     return;
   }
 
-  const commands = composeSyllableFromLib(info.cho, info.jung, info.jong, jamoLib);
+  const commands = composeCharFromLib(char, jamoLib);
   const editTargets = app._getEditTargetsForSyllable(info.cho, info.jung, info.jong);
 
   container.innerHTML = '';

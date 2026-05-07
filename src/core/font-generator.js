@@ -7,6 +7,7 @@ import { CHO, JUNG, JONG, compose, TOTAL_SYLLABLES } from './hangul.js';
 import { composeSyllable, commandsToPath } from './composer.js';
 import { deriveAll } from './jamo-derive.js';
 import { deriveAsciiGlyphs } from './ascii-derive.js';
+import { loadSyllableOverrides, composeSyllableWithOverride } from './glyph-utils.js';
 
 const UPM = 1000;
 const ASCENDER = 800;
@@ -150,6 +151,7 @@ function createGlyph(name, unicode, commands, advanceWidth = UPM) {
 export function generateFont(jamoLib, fontName = 'MyHandwritingFont', onProgress = null) {
   // 1. 자모 파생 (쌍자음, 복합모음, 겹받침)
   const fullLib = deriveAll(jamoLib);
+  const syllableOverrides = loadSyllableOverrides();
 
   // 2. .notdef 글리프
   const notdefGlyph = new opentype.Glyph({
@@ -179,7 +181,7 @@ export function generateFont(jamoLib, fontName = 'MyHandwritingFont', onProgress
         const unicode = char.charCodeAt(0);
         const name = `uni${unicode.toString(16).toUpperCase().padStart(4, '0')}`;
 
-        const commands = composeSyllable(cho, jung, jong, fullLib);
+        const commands = composeSyllableWithOverride(cho, jung, jong, fullLib, syllableOverrides?.[char] || null);
         const glyph = createGlyph(name, unicode, commands);
         glyphs.push(glyph);
 
