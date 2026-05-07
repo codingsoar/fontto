@@ -7,10 +7,11 @@ const DRAFT_STORAGE_KEY = 'fontto-jamo-drafts-v1';
 const GUIDE_BOX_STORAGE_KEY = 'fontto-guide-boxes-v1';
 const SYLLABLE_IMPORT_STORAGE_KEY = 'fontto-syllable-imports-v1';
 const TEMPLATE_SOURCE_STORAGE_KEY = 'fontto-template-sources-v1';
+const DOWNLOAD_ACCESS_STORAGE_KEY = 'fontto-download-access-v1';
 
 /**
  * Load all saved state from localStorage
- * @returns {{ jamoLib: Object, jamoDrafts: Object, guideOverrides: Object, syllableImports: Object, templateImportedSlots: Array }}
+ * @returns {{ jamoLib: Object, jamoDrafts: Object, guideOverrides: Object, syllableImports: Object, templateImportedSlots: Array, downloadAccess: Object }}
  */
 export function loadState() {
   const state = {
@@ -19,6 +20,11 @@ export function loadState() {
     guideOverrides: {},
     syllableImports: {},
     templateImportedSlots: [],
+    downloadAccess: {
+      unlocked: false,
+      fontName: '',
+      unlockedAt: '',
+    },
   };
 
   try {
@@ -61,6 +67,18 @@ export function loadState() {
         state.templateImportedSlots = parsedTemplateSources;
       }
     }
+
+    const downloadAccessRaw = window.localStorage.getItem(DOWNLOAD_ACCESS_STORAGE_KEY);
+    if (downloadAccessRaw) {
+      const parsedDownloadAccess = JSON.parse(downloadAccessRaw);
+      if (parsedDownloadAccess && typeof parsedDownloadAccess === 'object') {
+        state.downloadAccess = {
+          unlocked: Boolean(parsedDownloadAccess.unlocked),
+          fontName: typeof parsedDownloadAccess.fontName === 'string' ? parsedDownloadAccess.fontName : '',
+          unlockedAt: typeof parsedDownloadAccess.unlockedAt === 'string' ? parsedDownloadAccess.unlockedAt : '',
+        };
+      }
+    }
   } catch (error) {
     console.warn('Failed to load saved jamo library:', error);
   }
@@ -70,7 +88,7 @@ export function loadState() {
 
 /**
  * Persist all state to localStorage
- * @param {{ jamoLib: Object, jamoDrafts: Object, guideOverrides: Object, syllableImports: Object, templateImportedSlots: Array }} state
+ * @param {{ jamoLib: Object, jamoDrafts: Object, guideOverrides: Object, syllableImports: Object, templateImportedSlots: Array, downloadAccess: Object }} state
  */
 export function saveState(state) {
   try {
@@ -79,6 +97,11 @@ export function saveState(state) {
     window.localStorage.setItem(GUIDE_BOX_STORAGE_KEY, JSON.stringify(state.guideOverrides));
     window.localStorage.setItem(SYLLABLE_IMPORT_STORAGE_KEY, JSON.stringify(state.syllableImports));
     window.localStorage.setItem(TEMPLATE_SOURCE_STORAGE_KEY, JSON.stringify(state.templateImportedSlots || []));
+    window.localStorage.setItem(DOWNLOAD_ACCESS_STORAGE_KEY, JSON.stringify(state.downloadAccess || {
+      unlocked: false,
+      fontName: '',
+      unlockedAt: '',
+    }));
   } catch (error) {
     console.warn('Failed to persist jamo library:', error);
   }

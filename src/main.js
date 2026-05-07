@@ -46,6 +46,11 @@ class FonttoApp {
   guideOverrides = {};
   syllableImports = {};
   templateImportedSlots = [];
+  downloadAccess = {
+    unlocked: false,
+    fontName: '',
+    unlockedAt: '',
+  };
 
   constructor() {
     this.jamoLib = {};
@@ -74,6 +79,11 @@ class FonttoApp {
     this.guideOverrides = saved.guideOverrides;
     this.syllableImports = saved.syllableImports;
     this.templateImportedSlots = saved.templateImportedSlots || [];
+    this.downloadAccess = saved.downloadAccess || {
+      unlocked: false,
+      fontName: '',
+      unlockedAt: '',
+    };
     this._showLanding();
     window.addEventListener('resize', () => this._handleResize());
   }
@@ -2542,7 +2552,31 @@ class FonttoApp {
       guideOverrides: this.guideOverrides,
       syllableImports: this.syllableImports,
       templateImportedSlots: this.templateImportedSlots,
+      downloadAccess: this.downloadAccess,
     });
+  }
+
+  _hasUnlockedDownload(fontName) {
+    if (!fontName) return false;
+    return Boolean(this.downloadAccess?.unlocked && this.downloadAccess.fontName === fontName);
+  }
+
+  _unlockDownload(fontName) {
+    this.downloadAccess = {
+      unlocked: true,
+      fontName,
+      unlockedAt: new Date().toISOString(),
+    };
+    this._persistState();
+  }
+
+  _lockDownload() {
+    this.downloadAccess = {
+      unlocked: false,
+      fontName: '',
+      unlockedAt: '',
+    };
+    this._persistState();
   }
 
   _applyGuideOverride(categoryId, itemKey, guide) {

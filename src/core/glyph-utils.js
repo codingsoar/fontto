@@ -150,3 +150,43 @@ export function createPartPreviewCanvas(commands, size = 96) {
   drawPathCommands(ctx, commands, 0, 0, size);
   return canvas;
 }
+
+/**
+ * Compute a loose bounding box for path commands in font units.
+ * Useful for preview spacing heuristics.
+ * @param {Array} commands
+ * @returns {{ minX: number, minY: number, maxX: number, maxY: number, width: number, height: number } | null}
+ */
+export function getCommandBounds(commands) {
+  if (!Array.isArray(commands) || commands.length === 0) return null;
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
+  const includePoint = (x, y) => {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+  };
+
+  commands.forEach((cmd) => {
+    includePoint(cmd.x, cmd.y);
+    includePoint(cmd.x1, cmd.y1);
+    includePoint(cmd.x2, cmd.y2);
+  });
+
+  if (!Number.isFinite(minX)) return null;
+
+  return {
+    minX,
+    minY,
+    maxX,
+    maxY,
+    width: Math.max(maxX - minX, 0),
+    height: Math.max(maxY - minY, 0),
+  };
+}
