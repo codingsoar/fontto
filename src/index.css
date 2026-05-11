@@ -475,12 +475,36 @@ body {
 }
 
 .pending-imported-strip-scroller {
-  display: flex;
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(2, 212px);
+  grid-auto-columns: 132px;
   gap: 12px;
   overflow-x: auto;
   overflow-y: hidden;
   padding-bottom: 6px;
   scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.1) transparent;
+  align-items: stretch;
+  align-content: start;
+  max-height: 448px;
+}
+
+.pending-imported-strip-scroller::-webkit-scrollbar {
+  height: 6px;
+}
+
+.pending-imported-strip-scroller::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.pending-imported-strip-scroller::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.1);
+  border-radius: 3px;
+}
+
+.pending-imported-strip-scroller::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.2);
 }
 
 .pending-imported-strip-empty {
@@ -493,10 +517,13 @@ body {
 }
 
 .pending-imported-card {
-  flex: 0 0 132px;
   display: grid;
+  grid-template-rows: 84px auto minmax(0, 1fr);
   justify-items: center;
+  align-items: start;
   gap: 8px;
+  width: 132px;
+  height: 212px;
   padding: 12px 10px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
@@ -531,6 +558,12 @@ body {
   color: var(--text-secondary);
   text-align: center;
   line-height: 1.4;
+  align-self: stretch;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  word-break: keep-all;
 }
 
 .pending-parts-header {

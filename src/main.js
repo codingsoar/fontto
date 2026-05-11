@@ -644,6 +644,12 @@ class FonttoApp {
     }
 
     container.innerHTML = '';
+    container.onwheel = (event) => {
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+      event.preventDefault();
+      container.scrollLeft += event.deltaY;
+    };
+
     importedSlots.forEach((slot, index) => {
       const card = document.createElement('button');
       card.type = 'button';
