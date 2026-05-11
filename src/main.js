@@ -102,7 +102,6 @@ class FonttoApp {
         <div class="landing-bg"></div>
         <div class="landing-content">
           <div class="landing-logo">
-            <span class="logo-icon">Aa</span>
             <h1 class="logo-text">Fontto</h1>
           </div>
           <p class="landing-subtitle">내 손글씨를 한글 폰트로 만들어보세요.</p>
