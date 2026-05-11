@@ -116,8 +116,18 @@ body {
 }
 
 .logo-icon {
-  font-size: 56px;
-  filter: drop-shadow(0 0 20px rgba(124, 92, 252, 0.5));
+  width: 58px;
+  height: 58px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  filter: drop-shadow(0 0 20px rgba(124, 92, 252, 0.35));
+}
+
+.logo-icon svg {
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 
 .logo-text {
@@ -1094,13 +1104,14 @@ body {
 
 .preview-browser {
   display: grid;
-  gap: 8px;
+  gap: 6px;
   height: 100%;
   min-height: 0;
-  padding: 18px;
+  padding: 14px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
   background: var(--bg-secondary);
+  align-content: start;
 }
 
 .preview-browser-toolbar {
@@ -1149,20 +1160,21 @@ body {
 
 .preview-browser-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
   overflow-y: auto;
   min-height: 0;
   align-content: start;
+  justify-items: stretch;
 }
 
 .preview-browser-card {
   position: relative;
   display: grid;
   place-items: center;
-  gap: 8px;
-  min-height: 102px;
-  padding: 10px 8px;
+  gap: 6px;
+  min-height: 84px;
+  padding: 8px 6px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.03);
@@ -1200,12 +1212,12 @@ body {
 
 .preview-browser-import-image {
   display: block;
-  width: 72px;
-  height: 72px;
+  width: 58px;
+  height: 58px;
   object-fit: contain;
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.24);
-  padding: 6px;
+  padding: 4px;
 }
 
 .preview-browser-badge {
@@ -1219,9 +1231,9 @@ body {
 
 .preview-browser-char {
   position: absolute;
-  top: 12px;
-  left: 12px;
-  font-size: 14px;
+  top: 10px;
+  left: 10px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-secondary);
   line-height: 1;

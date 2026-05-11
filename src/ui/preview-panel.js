@@ -12,7 +12,7 @@ export class PreviewPanel {
     this.syllableImports = {};
     this.sampleText = '가나다라마바사 아자차카타파하';
     this.browserPage = 0;
-    this.browserPageSize = 35;
+    this.browserPageSize = 48;
     this.browserSelectedChar = '가';
     this.allSyllables = null;
     this.previewInput = null;
@@ -195,6 +195,7 @@ export class PreviewPanel {
       return;
     }
 
+    this.browserPageSize = this._getBrowserPageSize();
     this.browserSelectedChar = char;
     this.browserPage = Math.floor(index / this.browserPageSize);
     if (this.browserInput) {
@@ -206,6 +207,7 @@ export class PreviewPanel {
   _renderBrowser() {
     if (!this.browserGrid || !this.browserPageLabel) return;
 
+    this.browserPageSize = this._getBrowserPageSize();
     const chars = this._getAllSyllables();
     const totalPages = Math.max(Math.ceil(chars.length / this.browserPageSize), 1);
     this.browserPage = Math.min(this.browserPage, totalPages - 1);
@@ -237,7 +239,7 @@ export class PreviewPanel {
       let visualNode;
       if (hasComposedGlyph && commands.length > 0) {
         const canvas = document.createElement('canvas');
-        const size = 48;
+        const size = 42;
         const dpr = window.devicePixelRatio || 1;
         canvas.width = size * dpr;
         canvas.height = size * dpr;
@@ -256,7 +258,7 @@ export class PreviewPanel {
         visualNode = image;
       } else {
         const canvas = document.createElement('canvas');
-        const size = 48;
+        const size = 42;
         const dpr = window.devicePixelRatio || 1;
         canvas.width = size * dpr;
         canvas.height = size * dpr;
@@ -300,6 +302,43 @@ export class PreviewPanel {
 
       this.browserGrid.appendChild(button);
     });
+  }
+
+  _getBrowserPageSize() {
+    if (!this.browserGrid) return this.browserPageSize || 48;
+
+    const gridStyle = window.getComputedStyle(this.browserGrid);
+    const columns = Math.max(
+      (gridStyle.gridTemplateColumns || '')
+        .split(' ')
+        .map((value) => value.trim())
+        .filter(Boolean)
+        .length,
+      1
+    );
+    const rowGap = Number.parseFloat(gridStyle.rowGap || gridStyle.gap || '0') || 0;
+
+    const probe = document.createElement('button');
+    probe.type = 'button';
+    probe.className = 'preview-browser-card';
+    probe.style.visibility = 'hidden';
+    probe.style.pointerEvents = 'none';
+    probe.setAttribute('aria-hidden', 'true');
+    this.browserGrid.appendChild(probe);
+    const cardHeight = probe.getBoundingClientRect().height || 84;
+    probe.remove();
+
+    const availableHeight = this.browserGrid.clientHeight;
+    if (!availableHeight || !cardHeight) {
+      return this.browserPageSize || columns;
+    }
+
+    const rows = Math.max(
+      Math.floor((availableHeight + rowGap) / (cardHeight + rowGap)),
+      1
+    );
+
+    return columns * rows;
   }
 
   _renderPreview() {
@@ -474,6 +513,13 @@ export class PreviewPanel {
   resize() {
     if (this.previewCanvas) {
       this._setupCanvas();
+    }
+    if (this.showBrowser) {
+      const selectedIndex = this._getAllSyllables().indexOf(this.browserSelectedChar);
+      this.browserPageSize = this._getBrowserPageSize();
+      if (selectedIndex >= 0) {
+        this.browserPage = Math.floor(selectedIndex / this.browserPageSize);
+      }
     }
     this._renderPreview();
     this._renderBrowser();

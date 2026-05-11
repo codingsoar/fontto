@@ -102,6 +102,18 @@ class FonttoApp {
         <div class="landing-bg"></div>
         <div class="landing-content">
           <div class="landing-logo">
+            <span class="logo-icon" aria-hidden="true">
+              <svg viewBox="0 0 64 64" role="presentation" focusable="false">
+                <defs>
+                  <linearGradient id="landingLogoGlyph" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stop-color="#7c5cfc"></stop>
+                    <stop offset="100%" stop-color="#00d4aa"></stop>
+                  </linearGradient>
+                </defs>
+                <rect x="8" y="8" width="48" height="48" rx="14" fill="rgba(255,255,255,0.04)" stroke="url(#landingLogoGlyph)" stroke-width="3"></rect>
+                <path d="M24 18H43V23H30V29H41V34H30V46H24V18Z" fill="url(#landingLogoGlyph)"></path>
+              </svg>
+            </span>
             <h1 class="logo-text">Fontto</h1>
           </div>
           <p class="landing-subtitle">내 손글씨를 한글 폰트로 만들어보세요.</p>
@@ -143,15 +155,6 @@ class FonttoApp {
     document.getElementById('startTemplateBtn').addEventListener('click', () => {
       this._showEditor('template');
     });
-    const landingActions = app.querySelector('.landing-start-actions');
-    if (landingActions && !document.getElementById('resetAllDataBtn')) {
-      const resetBtn = document.createElement('button');
-      resetBtn.className = 'start-btn ghost';
-      resetBtn.id = 'resetAllDataBtn';
-      resetBtn.innerHTML = '<span>Reset All Data</span>';
-      resetBtn.addEventListener('click', () => this._showResetAllDataConfirm());
-      landingActions.appendChild(resetBtn);
-    }
   }
   _showEditor(initialMode = 'draw') {
     this.currentStep = 'editor';
@@ -1728,6 +1731,7 @@ class FonttoApp {
 
     const importedSlots = [...importedByChar.values()];
     this.templateImportedSlots = importedSlots;
+    this._renderPendingPartsPanel();
     this._persistState();
     this._pushHistorySnapshot(historySnapshot, '템플릿 원본 저장');
     showToast(`템플릿 가져오기 완료: 원본 글자 ${imported}개`, imported > 0 ? 'success' : 'warning', 3200);
