@@ -113,7 +113,7 @@ class FonttoApp {
               <p>같은 자모도 모음 방향·받침 유무에 따라 모양이 달라집니다. 맥락별로 한 번씩 쓰면 나머지 글자는 자동 생성됩니다.</p>
             </div>
             <div class="feature-card">
-              <span class="feature-icon">AI</span>
+              <span class="feature-icon">AUTO</span>
               <h3>글자 자동 조합</h3>
               <p>초성, 중성, 종성을 글자 구조에 맞게 조합해 완성형 글자를 만듭니다.</p>
             </div>
