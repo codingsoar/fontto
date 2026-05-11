@@ -29,7 +29,7 @@ import { renderPdfFileToCanvases } from './core/pdf-renderer.js';
 import { buildTemplatePdfBytes } from './core/template-pdf.js';
 import { CHO, JUNG, JONG, compose, getVowelCategory, getJongInfo } from './core/hangul.js';
 import { loadState, saveState, clearState } from './core/storage.js';
-import { decomposeChar, composeSyllableFromLib, composeCharFromLib, drawGlyphOnCtx, drawPathCommands, createGlyphCanvas, createPartPreviewCanvas } from './core/glyph-utils.js';
+import { decomposeChar, composeSyllableFromLib, composeCharFromLib, drawGlyphOnCtx, drawPathCommands, createGlyphCanvas, createPartPreviewCanvas, loadSyllableOverrides, saveSyllableOverrides, loadDeletedSyllables, saveDeletedSyllables } from './core/glyph-utils.js';
 import { showToast } from './ui/toast.js';
 import { showPreviewModal } from './ui/modals/preview-modal.js';
 import { showGenerateModal } from './ui/modals/generate-modal.js';
@@ -1835,7 +1835,6 @@ class FonttoApp {
           sequenceIndex: index,
         });
         closeModal?.();
-        showToast(`${slot.char} 글자의 부분 적용 화면을 열었습니다.`, 'success', 2200);
       });
 
       grid.appendChild(card);
@@ -2735,6 +2734,7 @@ class FonttoApp {
 
     if (applied > 0) {
       if (state.char && state.imageSrc) {
+        this._restoreDeletedSyllable(state.char);
         this.syllableImports[state.char] = {
           imageSrc: state.imageSrc,
           sourceChar: state.char,
@@ -2752,7 +2752,6 @@ class FonttoApp {
       this._checkGenerateReady();
       this._renderPendingPartsPanel();
       this._focusAppliedGlyphCard(state.char, appliedTargets);
-      showToast(`일치하는 글자 카드에 부분 ${applied}개를 적용했습니다.`, 'success', 2600);
     }
 
     return {
@@ -2807,7 +2806,6 @@ class FonttoApp {
     if (saved > 0) {
       this._pushHistorySnapshot(historySnapshot, '부분 임시 저장');
       this._renderPendingPartsPanel();
-      showToast(`부분 ${saved}개를 저장된 부분에 추가했습니다.`, 'success', 2400);
     }
 
     return {
@@ -3101,6 +3099,45 @@ class FonttoApp {
     this.previewPanel?.updateSyllableImports(this.syllableImports);
     this.browserPanel?.updateSyllableImports(this.syllableImports);
     this.templateBrowserPanel?.updateSyllableImports(this.syllableImports);
+  }
+
+  _restoreDeletedSyllable(char) {
+    if (!char) return;
+    const deleted = new Set(loadDeletedSyllables());
+    if (!deleted.has(char)) return;
+    deleted.delete(char);
+    saveDeletedSyllables([...deleted]);
+  }
+
+  _deleteSyllableCard(char) {
+    if (!char) return false;
+
+    const overrides = loadSyllableOverrides();
+    const hadOverride = Boolean(overrides?.[char]);
+    const hadImport = Boolean(this.syllableImports?.[char]);
+
+    if (!hadOverride && !hadImport) {
+      showToast(`${char} 글자 카드에서 삭제할 저장 데이터가 없습니다.`, 'warning', 2200);
+      return false;
+    }
+
+    if (hadOverride) {
+      delete overrides[char];
+      saveSyllableOverrides(overrides);
+    }
+
+    if (hadImport) {
+      delete this.syllableImports[char];
+      this._persistState();
+    }
+
+    const deleted = new Set(loadDeletedSyllables());
+    deleted.add(char);
+    saveDeletedSyllables([...deleted]);
+
+    this._refreshGlyphViews();
+    showToast(`${char} 글자 카드 데이터를 삭제했습니다.`, 'success', 2200);
+    return true;
   }
 
   _resetAllData() {

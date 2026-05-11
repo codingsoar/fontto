@@ -10,6 +10,7 @@ const TEMPLATE_SOURCE_STORAGE_KEY = 'fontto-template-sources-v1';
 const DOWNLOAD_ACCESS_STORAGE_KEY = 'fontto-download-access-v1';
 const PENDING_PARTS_STORAGE_KEY = 'fontto-pending-parts-v1';
 const SYLLABLE_OVERRIDE_STORAGE_KEY = 'fontto-syllable-overrides-v1';
+const DELETED_SYLLABLE_STORAGE_KEY = 'fontto-deleted-syllables-v1';
 
 /**
  * Load all saved state from localStorage
@@ -130,6 +131,7 @@ export function clearState() {
       DOWNLOAD_ACCESS_STORAGE_KEY,
       PENDING_PARTS_STORAGE_KEY,
       SYLLABLE_OVERRIDE_STORAGE_KEY,
+      DELETED_SYLLABLE_STORAGE_KEY,
     ].forEach((key) => window.localStorage.removeItem(key));
   } catch (error) {
     console.warn('Failed to clear saved jamo library:', error);

@@ -1,5 +1,5 @@
 ﻿import { compose, decompose, CHO, JUNG, JONG, getVowelCategory } from '../core/hangul.js';
-import { loadSyllableOverrides, composeCharFromLib } from '../core/glyph-utils.js';
+import { loadSyllableOverrides, composeCharFromLib, isSyllableDeleted } from '../core/glyph-utils.js';
 
 export class PreviewPanel {
   constructor(container, options = {}) {
@@ -221,9 +221,10 @@ export class PreviewPanel {
     this.browserGrid.innerHTML = '';
 
     pageChars.forEach((char) => {
-      const imported = this.syllableImports?.[char];
+      const deleted = isSyllableDeleted(char);
+      const imported = deleted ? null : this.syllableImports?.[char];
       const commands = this._getComposedCommands(char);
-      const hasComposedGlyph = this._hasCompleteComposedGlyph(char);
+      const hasComposedGlyph = !deleted && this._hasCompleteComposedGlyph(char);
       const button = document.createElement('button');
       button.type = 'button';
       button.className = [
@@ -343,7 +344,8 @@ export class PreviewPanel {
 
         if (char === ' ') continue;
 
-        const imported = this.syllableImports?.[char];
+        const deleted = isSyllableDeleted(char);
+        const imported = deleted ? null : this.syllableImports?.[char];
         const commands = this._getComposedCommands(char);
         if (commands.length > 0) {
           this._drawCommands(ctx, commands, x, y, cellSize);

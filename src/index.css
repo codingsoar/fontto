@@ -2160,7 +2160,6 @@ body {
   font-size: 14px;
   box-shadow: var(--shadow-lg);
   z-index: 9999;
-  animation: toastIn 0.3s var(--transition-slow);
 }
 
 .toast-success {
@@ -2171,16 +2170,6 @@ body {
 .toast-warning {
   border-color: rgba(255, 184, 77, 0.36);
   background: rgba(255, 184, 77, 0.14);
-}
-
-@keyframes toastIn {
-  from { opacity: 0; transform: translateX(-50%) translateY(20px); }
-  to { opacity: 1; transform: translateX(-50%) translateY(0); }
-}
-
-.toast-fade {
-  opacity: 0;
-  transition: opacity 0.5s ease;
 }
 
 /* ══════════════════════════════════════════════════════════

@@ -9,6 +9,7 @@ import { composeSyllable, composeSyllableParts } from './composer.js';
 import { deriveAsciiGlyphs } from './ascii-derive.js';
 
 const SYLLABLE_OVERRIDE_STORAGE_KEY = 'fontto-syllable-overrides-v1';
+const DELETED_SYLLABLE_STORAGE_KEY = 'fontto-deleted-syllables-v1';
 
 /**
  * Decompose a Hangul syllable character into cho/jung/jong indices.
@@ -52,6 +53,29 @@ export function saveSyllableOverrides(overrides) {
   } catch (error) {
     console.warn('Failed to save syllable overrides:', error);
   }
+}
+
+export function loadDeletedSyllables() {
+  try {
+    const raw = localStorage.getItem(DELETED_SYLLABLE_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveDeletedSyllables(chars) {
+  try {
+    localStorage.setItem(DELETED_SYLLABLE_STORAGE_KEY, JSON.stringify(chars));
+  } catch (error) {
+    console.warn('Failed to save deleted syllables:', error);
+  }
+}
+
+export function isSyllableDeleted(char) {
+  if (!char) return false;
+  return loadDeletedSyllables().includes(char);
 }
 
 export function applyOverrideToCommands(commands, override) {
@@ -113,6 +137,9 @@ export function composeSyllableWithOverride(cho, jung, jong, jamoLib, override =
 }
 
 export function composeCharFromLib(char, jamoLib, overridesMap = null) {
+  if (isSyllableDeleted(char)) {
+    return [];
+  }
   const info = decomposeChar(char);
   if (!info) {
     if (!char || char.length !== 1) return [];
