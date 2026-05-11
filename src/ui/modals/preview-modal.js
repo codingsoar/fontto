@@ -3,10 +3,8 @@
  */
 
 import {
-  decomposeChar,
   composeCharFromLib,
   drawGlyphOnCtx,
-  getCommandBounds,
 } from '../../core/glyph-utils.js';
 import { deriveAll } from '../../core/jamo-derive.js';
 
@@ -109,22 +107,16 @@ function renderPreviewText(text, container, jamoLib, options = {}) {
   const canvas = document.createElement('canvas');
   const dpr = window.devicePixelRatio || 1;
   const lines = text.split('\n');
-  const maxChars = Math.max(...lines.map((line) => line.length), 1);
   const paddingX = 20;
-  const availableWidth = Math.max((container.clientWidth || 700) - 32, 240);
-  const gap = Math.min(8, Math.max(-8, Number(options.letterSpacing || 0)));
-  const cellSize = Math.max(
-    Math.min(
-      48,
-      (availableWidth - paddingX * 2 - Math.max(gap, 0) * Math.max(maxChars - 1, 0)) / maxChars
-    ),
-    1
-  );
-  const lineHeight = cellSize + 12;
-  const layouts = lines.map((line) => buildLineLayout(line, jamoLib, cellSize, gap, options));
-
-  const w = Math.ceil(Math.max(...layouts.map((layout) => layout.width), 0) + paddingX * 2);
-  const h = lines.length * lineHeight + 20;
+  const paddingY = 18;
+  const cellSize = 48;
+  const gap = Math.max(0, Number(options.letterSpacing || 0)) + 6;
+  const lineHeight = cellSize + 14;
+  const maxChars = Math.max(...lines.map((line) => line.length), 1);
+  const contentWidth = paddingX * 2 + Math.max(0, maxChars * (cellSize + gap) - gap);
+  const contentHeight = paddingY * 2 + Math.max(0, lines.length * lineHeight - (lineHeight - cellSize));
+  const w = Math.max(Math.ceil(container.clientWidth || 700), contentWidth);
+  const h = Math.max(Math.ceil(container.clientHeight || 260), contentHeight);
 
   canvas.width = w * dpr;
   canvas.height = h * dpr;
@@ -134,15 +126,14 @@ function renderPreviewText(text, container, jamoLib, options = {}) {
   const ctx = canvas.getContext('2d');
   ctx.scale(dpr, dpr);
 
-  for (let lineIndex = 0; lineIndex < layouts.length; lineIndex += 1) {
-    const layout = layouts[lineIndex];
-    for (let charIndex = 0; charIndex < layout.items.length; charIndex += 1) {
-      const item = layout.items[charIndex];
-      const char = item.char;
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const line = lines[lineIndex];
+    for (let charIndex = 0; charIndex < line.length; charIndex += 1) {
+      const char = line[charIndex];
       if (char === ' ') continue;
 
-      const x = paddingX + item.x;
-      const y = 10 + lineIndex * lineHeight;
+      const x = paddingX + charIndex * (cellSize + gap);
+      const y = paddingY + lineIndex * lineHeight;
       const commands = composeCharFromLib(char, jamoLib);
       if (!commands.length) continue;
       drawGlyphOnCtx(ctx, commands, x, y, cellSize);
@@ -150,49 +141,6 @@ function renderPreviewText(text, container, jamoLib, options = {}) {
   }
 
   container.appendChild(canvas);
-}
-
-function buildLineLayout(line, jamoLib, cellSize, gap, options) {
-  const items = [];
-  const glyphs = Array.from(line).map((char) => {
-    const info = decomposeChar(char);
-    const commands = composeCharFromLib(char, jamoLib);
-    return {
-      char,
-      bounds: getCommandBounds(commands),
-    };
-  });
-
-  const autoSpacing = options.autoSpacing !== false;
-  const defaultAdvance = Math.max(cellSize * 0.55, cellSize + gap);
-  const desiredWhitespace = cellSize * 0.14;
-  let cursor = 0;
-
-  glyphs.forEach((glyph, index) => {
-    items.push({ char: glyph.char, x: cursor });
-    if (index === glyphs.length - 1) return;
-
-    const nextGlyph = glyphs[index + 1];
-    let advance = defaultAdvance;
-
-    if (glyph.char === ' ' || nextGlyph.char === ' ') {
-      advance = Math.max(cellSize * 0.42, cellSize * 0.38 + gap);
-    } else if (autoSpacing && glyph.bounds && nextGlyph.bounds) {
-      const currentRight = ((1000 - glyph.bounds.maxX) / 1000) * cellSize;
-      const nextLeft = (nextGlyph.bounds.minX / 1000) * cellSize;
-      const pairWhitespace = currentRight + nextLeft;
-      const delta = pairWhitespace - desiredWhitespace;
-      advance -= delta * 0.55;
-    }
-
-    advance = Math.max(cellSize * 0.5, Math.min(cellSize * 1.24, advance));
-    cursor += advance;
-  });
-
-  return {
-    items,
-    width: cursor + cellSize,
-  };
 }
 
 function polishReviewText(text) {

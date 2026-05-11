@@ -33,11 +33,11 @@ export class PreviewPanel {
       const inputArea = document.createElement('div');
       inputArea.className = 'preview-input-area';
 
-      const input = document.createElement('input');
-      input.type = 'text';
+      const input = document.createElement('textarea');
       input.className = 'preview-input';
       input.placeholder = '미리보기 문장을 입력하세요.';
       input.value = this.sampleText;
+      input.rows = 2;
 
       let isComposing = false;
       input.addEventListener('compositionstart', () => {
@@ -302,58 +302,74 @@ export class PreviewPanel {
   }
 
   _renderPreview() {
-    const ctx = this.pCtx;
-    if (!ctx) return;
-
-    ctx.clearRect(0, 0, this.pW, this.pH);
-
+    if (!this.previewCanvas) return;
+    const wrap = this.previewCanvas.parentElement;
+    const rect = wrap?.getBoundingClientRect?.() || { width: 800, height: 120 };
     const text = this.sampleText;
     if (!text) return;
 
-    const paddingX = 20;
-    const gap = Math.min(4, Math.max(0, (this.pW - paddingX * 2) / Math.max(text.length, 1) * 0.08));
-    const cellSize = Math.max(
-      Math.min(
-        60,
-        (this.pW - paddingX * 2 - gap * Math.max(text.length - 1, 0)) / Math.max(text.length, 1)
-      ),
-      1
-    );
-    const startX = paddingX;
-    const startY = (this.pH - cellSize) / 2;
+    const lines = text.split('\n');
+    const paddingX = 16;
+    const paddingY = 14;
+    const cellSize = 48;
+    const gap = 8;
+    const lineHeight = cellSize + 14;
+    const maxChars = Math.max(...lines.map((line) => line.length), 1);
+    const contentWidth = paddingX * 2 + Math.max(0, maxChars * (cellSize + gap) - gap);
+    const contentHeight = paddingY * 2 + Math.max(0, lines.length * lineHeight - (lineHeight - cellSize));
+    const width = Math.max(Math.ceil(rect.width || 800), contentWidth);
+    const height = Math.max(Math.ceil(rect.height || 120), contentHeight);
+    const dpr = window.devicePixelRatio || 1;
 
-    for (let i = 0; i < text.length; i++) {
-      const char = text[i];
-      const x = startX + i * (cellSize + gap);
+    this.previewCanvas.width = width * dpr;
+    this.previewCanvas.height = height * dpr;
+    this.previewCanvas.style.width = `${width}px`;
+    this.previewCanvas.style.height = `${height}px`;
 
-      if (char === ' ') continue;
+    const ctx = this.previewCanvas.getContext('2d');
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, width, height);
+    this.pCtx = ctx;
+    this.pW = width;
+    this.pH = height;
 
-      const imported = this.syllableImports?.[char];
-      const commands = this._getComposedCommands(char);
-      if (commands.length > 0) {
-        this._drawCommands(ctx, commands, x, startY, cellSize);
-        continue;
+    for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+      const line = lines[lineIndex];
+      for (let charIndex = 0; charIndex < line.length; charIndex += 1) {
+        const char = line[charIndex];
+        const x = paddingX + charIndex * (cellSize + gap);
+        const y = paddingY + lineIndex * lineHeight;
+
+        if (char === ' ') continue;
+
+        const imported = this.syllableImports?.[char];
+        const commands = this._getComposedCommands(char);
+        if (commands.length > 0) {
+          this._drawCommands(ctx, commands, x, y, cellSize);
+          continue;
+        }
+
+        if (imported?.imageSrc) {
+          this._drawImportedPreview(ctx, char, x, y, cellSize);
+          continue;
+        }
+
+        if (!decompose(char)) {
+          ctx.save();
+          ctx.font = `${cellSize * 0.7}px "Pretendard", sans-serif`;
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(char, x + cellSize / 2, y + cellSize / 2);
+          ctx.restore();
+          continue;
+        }
+
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x, y, cellSize, cellSize);
       }
-
-      if (imported?.imageSrc) {
-        this._drawImportedPreview(ctx, char, x, startY, cellSize);
-        continue;
-      }
-
-      if (!decompose(char)) {
-        ctx.save();
-        ctx.font = `${cellSize * 0.7}px "Pretendard", sans-serif`;
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(char, x + cellSize / 2, startY + cellSize / 2);
-        ctx.restore();
-        continue;
-      }
-
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(x, startY, cellSize, cellSize);
     }
   }
 

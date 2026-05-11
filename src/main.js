@@ -3038,12 +3038,16 @@ class FonttoApp {
     const canvas = document.createElement('canvas');
     const dpr = window.devicePixelRatio || 1;
     const lines = text.split('\n');
+    const paddingX = 20;
+    const paddingY = 18;
     const cellSize = 48;
-    const lineHeight = cellSize + 12;
-    const maxChars = Math.max(...lines.map(l => l.length), 1);
-
-    const w = Math.min(maxChars * (cellSize + 4) + 40, container.clientWidth || 700);
-    const h = lines.length * lineHeight + 20;
+    const gap = 6;
+    const lineHeight = cellSize + 14;
+    const maxChars = Math.max(...lines.map((line) => line.length), 1);
+    const contentWidth = paddingX * 2 + Math.max(0, maxChars * (cellSize + gap) - gap);
+    const contentHeight = paddingY * 2 + Math.max(0, lines.length * lineHeight - (lineHeight - cellSize));
+    const w = Math.max(Math.ceil(container.clientWidth || 700), contentWidth);
+    const h = Math.max(Math.ceil(container.clientHeight || 260), contentHeight);
 
     canvas.width = w * dpr;
     canvas.height = h * dpr;
@@ -3059,8 +3063,8 @@ class FonttoApp {
         const char = line[ci];
         if (char === ' ') continue;
 
-        const x = 20 + ci * (cellSize + 4);
-        const y = 10 + li * lineHeight;
+        const x = paddingX + ci * (cellSize + gap);
+        const y = paddingY + li * lineHeight;
 
         const commands = composeCharFromLib(char, jamoLib);
         if (!commands.length) continue;

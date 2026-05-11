@@ -62,6 +62,15 @@ export function deriveLowercase(upperCommands) {
 }
 
 /**
+ * Normalize directly drawn lowercase glyphs into the same lowercase box
+ * used by derived lowercase fallback shapes.
+ */
+function normalizeLowercase(lowerCommands) {
+  if (!lowerCommands?.length) return [];
+  return fitCommands(lowerCommands, 100, 200, 800, 450);
+}
+
+/**
  * Derive all ASCII glyphs from user-drawn ASCII entries.
  * @param {Object} asciiLib — keys like 'ascii_A', 'ascii_a', 'ascii_0', 'ascii_!', etc.
  * @returns {Object} — full ASCII glyph library with keys 'ascii_33' through 'ascii_126'
@@ -78,12 +87,14 @@ export function deriveAsciiGlyphs(asciiLib) {
     }
   }
 
-  // Copy lowercase a-z from user input, or derive from uppercase when missing
+  // Copy lowercase a-z from user input.
+  // If missing, derive a lowercase-sized fallback from uppercase so the
+  // character still renders, while staying visually distinct from caps.
   for (let i = 97; i <= 122; i++) {
     const letter = String.fromCharCode(i);
     const key = `ascii_${letter}`;
     if (asciiLib[key]?.length) {
-      result[`ascii_${i}`] = asciiLib[key];
+      result[`ascii_${i}`] = normalizeLowercase(asciiLib[key]);
       continue;
     }
 
