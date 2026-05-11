@@ -13,8 +13,8 @@ const TEMPLATE_PADDING_X = 80;
 const TEMPLATE_PADDING_Y = 144;
 const TEMPLATE_HEADER_HEIGHT = 96;
 const TEMPLATE_FOOTER_HEIGHT = 68;
-const TEMPLATE_DRAW_PADDING = 20;
-const TEMPLATE_IMPORT_INSET = 16;
+const TEMPLATE_DRAW_PADDING = 30;
+const TEMPLATE_IMPORT_INSET = 22;
 const TEMPLATE_FONT_FAMILY = 'NanumGothic ExtraBold, Nanum Gothic, NanumGothic, sans-serif';
 
 export function getTemplateSlots() {
@@ -87,7 +87,7 @@ export function buildTemplateSvg(slots, pageIndex = 0, totalPages = 1) {
         <rect x="${drawRect.x}" y="${drawRect.y}" width="${drawRect.w}" height="${drawRect.h}" rx="16" fill="#fafbff" stroke="#c6cbdb" stroke-dasharray="12 12" stroke-width="2" />
         <text x="${rect.x + 24}" y="${headerY}" font-family="${TEMPLATE_FONT_FAMILY}" font-size="30" font-weight="800" fill="#22283a">${escapeXml(title)}</text>
         <text x="${rect.x + 24}" y="${headerY + 36}" font-family="${TEMPLATE_FONT_FAMILY}" font-size="22" font-weight="800" fill="#667089">${escapeXml(categoryText)} - ${escapeXml(slot.guideLabel)}</text>
-        <text x="${drawRect.x + drawRect.w / 2}" y="${guideCenterY}" text-anchor="middle" dy="0.35em" font-family="${TEMPLATE_FONT_FAMILY}" font-size="176" font-weight="800" fill="#e6eaf5">${escapeXml(slot.example)}</text>
+        <text x="${drawRect.x + drawRect.w / 2}" y="${guideCenterY}" text-anchor="middle" dy="0.35em" font-family="${TEMPLATE_FONT_FAMILY}" font-size="156" font-weight="800" fill="#e6eaf5">${escapeXml(slot.example)}</text>
         <text x="${rect.x + 24}" y="${rect.y + rect.h - 24}" font-family="${TEMPLATE_FONT_FAMILY}" font-size="22" font-weight="800" fill="#5a6278">${escapeXml(affectsText)}</text>
       </g>
     `;
