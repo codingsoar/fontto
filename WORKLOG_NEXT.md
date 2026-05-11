@@ -1,5 +1,60 @@
 # Fontto Worklog
 
+## 2026-05-11 Session Notes
+
+- Time: `2026-05-11 11:25:41 +09:00`
+- This folder is currently **not a Git repository**.
+- `fontto-main` has no `.git` directory, so commit/push was not possible in this session.
+- Dev server was confirmed reachable at `http://127.0.0.1:5173/`.
+- Local helper script added: `start-dev.ps1`
+
+### Changes made in this session
+
+- Removed modal open flicker:
+  - deleted shared modal enter animations in `src/index.css`
+- Fixed font generation modal markup:
+  - repaired broken `fontNameInput` HTML in `src/ui/modals/generate-modal.js`
+- Fixed ASCII apply path:
+  - ASCII glyph cards can now map to editable targets
+  - ASCII preview/glyph composition now resolves through `deriveAsciiGlyphs()`
+- Fixed preview modal accidental close on text selection:
+  - backdrop close now only triggers when pointer down starts on the overlay
+- Stabilized preview modal height:
+  - `.preview-render` now uses fixed height with internal scroll
+
+### Files changed in this session
+
+- `src/index.css`
+- `src/ui/modals/generate-modal.js`
+- `src/ui/modals/preview-modal.js`
+- `src/core/glyph-utils.js`
+- `src/main.js`
+- `start-dev.ps1`
+
+### Checks completed
+
+- `npm run build` passed after each relevant UI/code fix
+- `generateFont({}, 'SmokeTestFont')` smoke test passed
+- ASCII compose smoke test passed for `composeCharFromLib('A', lib)`
+- Local HTTP check returned `200` from `http://127.0.0.1:5173/`
+
+### Next things to verify in browser
+
+1. Open preview modal and confirm:
+   - selecting text in textarea does not close the modal
+   - modal height no longer jumps while typing
+2. Test glyph-card apply for ASCII:
+   - uppercase
+   - lowercase
+   - digits
+   - supported symbols
+3. Re-test `폰트 생성` button end-to-end in browser UI after the modal markup fix
+4. Decide whether preview canvas height should stay fixed or scale per line count with a capped max-height
+
+### Important note for next session
+
+- If push is needed, Git must be initialized or the actual repo root must be opened first.
+
 ## Current state
 
 - Template import no longer writes directly into jamo slots by default.

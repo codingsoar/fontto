@@ -557,7 +557,22 @@ class FonttoApp {
     const entries = Object.entries(this.pendingParts);
     panels.forEach((panel, index) => {
       const suffix = index === 0 ? 'Draw' : 'Template';
+      const importedStrip = index === 0
+        ? `
+      <section class="pending-imported-strip">
+        <div class="pending-imported-strip-header">
+          <div>
+            <h2>추출된 원본 글자</h2>
+            <p>템플릿에서 가져온 글자를 가로로 훑어보고, 필요한 글자를 눌러 바로 분해하거나 적용할 수 있습니다.</p>
+          </div>
+          <span class="pending-imported-strip-count">${this.templateImportedSlots.length}개</span>
+        </div>
+        <div class="pending-imported-strip-scroller" id="pendingImportedStripScroller"></div>
+      </section>
+    `
+        : '';
       panel.innerHTML = `
+      ${importedStrip}
       <div class="pending-parts-header">
         <div>
           <h2>저장된 부분</h2>
@@ -570,6 +585,13 @@ class FonttoApp {
       </div>
       <div class="pending-parts-grid" id="pendingPartsGrid${suffix}"></div>
     `;
+
+      if (index === 0) {
+        this._renderPendingImportedStrip(
+          panel.querySelector('#pendingImportedStripScroller'),
+          this.templateImportedSlots
+        );
+      }
 
       panel.querySelector('[data-pending-action="apply"]')?.addEventListener('click', () => {
         this._applyPendingParts();
@@ -610,6 +632,49 @@ class FonttoApp {
         card.appendChild(remove);
         grid.appendChild(card);
       });
+    });
+  }
+
+  _renderPendingImportedStrip(container, importedSlots = []) {
+    if (!container) return;
+
+    if (!importedSlots.length) {
+      container.innerHTML = '<div class="pending-imported-strip-empty">아직 템플릿에서 가져온 원본 글자가 없습니다.</div>';
+      return;
+    }
+
+    container.innerHTML = '';
+    importedSlots.forEach((slot, index) => {
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'pending-imported-card';
+
+      const image = document.createElement('img');
+      image.className = 'pending-imported-card-image';
+      image.alt = `${slot.char} 원본`;
+      image.src = slot.imageSrc;
+
+      const title = document.createElement('span');
+      title.className = 'pending-imported-card-title';
+      title.textContent = slot.char;
+
+      const subtitle = document.createElement('span');
+      subtitle.className = 'pending-imported-card-subtitle';
+      subtitle.textContent = slot.targets.map((target) => target.label).join(' / ');
+
+      card.appendChild(image);
+      card.appendChild(title);
+      card.appendChild(subtitle);
+      card.addEventListener('click', () => {
+        showSyllableSplitModal(this, slot.char, {
+          imageSrc: slot.imageSrc,
+          targets: slot.targets,
+          sequence: importedSlots,
+          sequenceIndex: index,
+        });
+      });
+
+      container.appendChild(card);
     });
   }
 
@@ -1826,8 +1891,37 @@ class FonttoApp {
 
   _getTargetsForManualSplit(char) {
     const info = decomposeChar(char);
-    if (!info) return [];
+    if (!info) {
+      const asciiTarget = this._getAsciiEditTarget(char);
+      return asciiTarget ? [asciiTarget] : [];
+    }
     return this._getEditTargetsForSyllable(info.cho, info.jung, info.jong);
+  }
+
+  _getAsciiEditTarget(char) {
+    if (!char || char.length !== 1) return null;
+
+    let categoryId = '';
+    if (/^[A-Z]$/.test(char)) {
+      categoryId = 'ascii_upper';
+    } else if (/^[a-z]$/.test(char)) {
+      categoryId = 'ascii_lower';
+    } else if (/^[0-9]$/.test(char)) {
+      categoryId = 'ascii_digit';
+    } else {
+      const asciiSymbols = new Set(['.', ',', '!', '?', ':', ';', "'", '"', '(', ')', '[', ']', '-', '/', '@', '#', '&', '*']);
+      if (asciiSymbols.has(char)) {
+        categoryId = 'ascii_symbol';
+      }
+    }
+
+    if (!categoryId) return null;
+
+    return {
+      categoryId,
+      jamo: char,
+      label: char,
+    };
   }
 
   _extractManualSplitImage(image) {
@@ -2968,10 +3062,8 @@ class FonttoApp {
         const x = 20 + ci * (cellSize + 4);
         const y = 10 + li * lineHeight;
 
-        const info = decomposeChar(char);
-        if (!info) continue;
-
         const commands = composeCharFromLib(char, jamoLib);
+        if (!commands.length) continue;
         drawGlyphOnCtx(ctx, commands, x, y, cellSize);
       }
     }

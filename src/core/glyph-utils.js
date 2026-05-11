@@ -6,6 +6,7 @@
  */
 
 import { composeSyllable, composeSyllableParts } from './composer.js';
+import { deriveAsciiGlyphs } from './ascii-derive.js';
 
 const SYLLABLE_OVERRIDE_STORAGE_KEY = 'fontto-syllable-overrides-v1';
 
@@ -113,7 +114,13 @@ export function composeSyllableWithOverride(cho, jung, jong, jamoLib, override =
 
 export function composeCharFromLib(char, jamoLib, overridesMap = null) {
   const info = decomposeChar(char);
-  if (!info) return [];
+  if (!info) {
+    if (!char || char.length !== 1) return [];
+    const asciiCode = char.charCodeAt(0);
+    if (asciiCode < 32 || asciiCode > 126) return [];
+    const asciiLib = deriveAsciiGlyphs(jamoLib || {});
+    return asciiLib[`ascii_${asciiCode}`] || [];
+  }
   const overrides = overridesMap ?? loadSyllableOverrides();
   return composeSyllableWithOverride(info.cho, info.jung, info.jong, jamoLib, overrides?.[char] || null);
 }

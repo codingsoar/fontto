@@ -50,9 +50,14 @@ export function showPreviewModal(app, options = {}) {
   document.body.appendChild(overlay);
 
   const closeBtn = document.getElementById('closePreviewModal');
+  let shouldCloseFromBackdrop = false;
   closeBtn.addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('pointerdown', (e) => {
+    shouldCloseFromBackdrop = e.target === overlay;
+  });
   overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) overlay.remove();
+    if (e.target === overlay && shouldCloseFromBackdrop) overlay.remove();
+    shouldCloseFromBackdrop = false;
   });
 
   const textarea = document.getElementById('previewText');
@@ -138,10 +143,8 @@ function renderPreviewText(text, container, jamoLib, options = {}) {
 
       const x = paddingX + item.x;
       const y = 10 + lineIndex * lineHeight;
-      const info = decomposeChar(char);
-      if (!info) continue;
-
       const commands = composeCharFromLib(char, jamoLib);
+      if (!commands.length) continue;
       drawGlyphOnCtx(ctx, commands, x, y, cellSize);
     }
   }
