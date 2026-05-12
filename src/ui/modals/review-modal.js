@@ -7,6 +7,7 @@ import {
   decomposeChar,
   composeCharFromLib,
   createGlyphCanvas,
+  isSyllableDeleted,
 } from '../../core/glyph-utils.js';
 import { deriveAll } from '../../core/jamo-derive.js';
 import { CATEGORIES, REQUIRED_JAMO_COUNT } from '../jamo-grid.js';
@@ -342,6 +343,16 @@ function renderReviewInspector(container, char, jamoLib, app) {
   const info = decomposeChar(char);
   if (!info) {
     renderReviewEmptyState(container);
+    return;
+  }
+
+  if (isSyllableDeleted(char)) {
+    container.innerHTML = `
+      <div class="review-empty-panel">
+        <h3 class="review-inspector-title">글자 ${char}</h3>
+        <p class="review-inspector-subtitle">이 글자는 삭제된 상태입니다. 복원하기 전까지 미리보기가 표시되지 않습니다.</p>
+      </div>
+    `;
     return;
   }
 

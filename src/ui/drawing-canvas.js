@@ -1,3 +1,5 @@
+import { rasterRectToCommands } from '../core/template-import.js';
+
 /**
  * drawing-canvas.js - stroke input canvas for jamo drawing
  *
@@ -623,6 +625,17 @@ export class DrawingCanvas {
     if (processedStroke.length < 2) return;
 
     const ctx = this.ctx;
+    this._drawProcessedStrokeToContext(ctx, processedStroke, {
+      strokeStyle: isActive
+        ? 'rgba(255, 255, 255, 0.9)'
+        : 'rgba(255, 255, 255, 0.95)',
+    });
+  }
+
+  _drawProcessedStrokeToContext(ctx, processedStroke, options = {}) {
+    if (!processedStroke || processedStroke.length < 2) return;
+
+    const strokeStyle = options.strokeStyle ?? 'rgba(255, 255, 255, 0.95)';
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
@@ -648,9 +661,7 @@ export class DrawingCanvas {
         }
 
         ctx.beginPath();
-        ctx.strokeStyle = isActive
-          ? 'rgba(255, 255, 255, 0.9)'
-          : 'rgba(255, 255, 255, 0.95)';
+        ctx.strokeStyle = strokeStyle;
         ctx.lineWidth = width;
         ctx.moveTo(prev.x, prev.y);
         ctx.lineTo(curr.x, curr.y);
@@ -658,9 +669,7 @@ export class DrawingCanvas {
       }
     } else {
       ctx.beginPath();
-      ctx.strokeStyle = isActive
-        ? 'rgba(255, 255, 255, 0.9)'
-        : 'rgba(255, 255, 255, 0.95)';
+      ctx.strokeStyle = strokeStyle;
       ctx.lineWidth = this.penSize;
       ctx.moveTo(processedStroke[0].x, processedStroke[0].y);
 
@@ -703,16 +712,54 @@ export class DrawingCanvas {
     const outputStrokes = this._getStrokesForOutput(options);
     if (outputStrokes.length === 0) return [];
 
+    const imageData = this._rasterizeStrokesForExport(outputStrokes, 4);
+    const commands = rasterRectToCommands(imageData, options.targetRegion ?? null);
+    if (commands.length > 0) {
+      return commands;
+    }
+
+    return this._toPolygonPathCommands(outputStrokes, options);
+  }
+
+  getSelectedStrokeCount() {
+    return this.selectedStrokeIndices.size;
+  }
+
+  _getStrokesForOutput(options = {}) {
+    if (!options.selectedOnly || this.selectedStrokeIndices.size === 0) {
+      return this.strokes;
+    }
+
+    return this.strokes.filter((_, index) => this.selectedStrokeIndices.has(index));
+  }
+
+  _rasterizeStrokesForExport(strokes, scaleFactor = 4) {
+    const width = Math.max(Math.round(this.displayWidth * scaleFactor), 1);
+    const height = Math.max(Math.round(this.displayHeight * scaleFactor), 1);
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.setTransform(scaleFactor, 0, 0, scaleFactor, 0, 0);
+    ctx.clearRect(0, 0, this.displayWidth, this.displayHeight);
+
+    strokes.forEach((stroke) => {
+      const processedStroke = this._getProcessedStroke(stroke);
+      this._drawProcessedStrokeToContext(ctx, processedStroke, {
+        strokeStyle: '#000000',
+      });
+    });
+
+    return ctx.getImageData(0, 0, width, height);
+  }
+
+  _toPolygonPathCommands(outputStrokes, options = {}) {
     const polygons = [];
-    const halfPen = this.penSize / 2;
 
     for (const stroke of outputStrokes) {
       const processedStroke = this._getProcessedStroke(stroke);
       if (processedStroke.length < 2) continue;
-      const polygon = this._buildStrokePolygon(processedStroke, halfPen);
-      if (polygon.length >= 3) {
-        polygons.push(polygon);
-      }
+      polygons.push(...this._buildStrokePolygons(processedStroke));
     }
 
     if (polygons.length === 0) return [];
@@ -746,11 +793,13 @@ export class DrawingCanvas {
     for (const polygon of polygons) {
       if (polygon.length === 0) continue;
 
-      const start = normalize(polygon[0]);
+      const normalizedPolygon = polygon.map(normalize);
+      const woundPolygon = this._normalizePolygonWinding(normalizedPolygon);
+      const start = woundPolygon[0];
       commands.push({ type: 'M', x: start.x, y: start.y });
 
-      for (let i = 1; i < polygon.length; i++) {
-        const point = normalize(polygon[i]);
+      for (let i = 1; i < woundPolygon.length; i++) {
+        const point = woundPolygon[i];
         commands.push({ type: 'L', x: point.x, y: point.y });
       }
 
@@ -760,39 +809,50 @@ export class DrawingCanvas {
     return commands;
   }
 
-  getSelectedStrokeCount() {
-    return this.selectedStrokeIndices.size;
-  }
+  _buildStrokePolygons(stroke) {
+    const polygons = [];
+    const halfPen = this.penSize / 2;
 
-  _getStrokesForOutput(options = {}) {
-    if (!options.selectedOnly || this.selectedStrokeIndices.size === 0) {
-      return this.strokes;
+    for (let i = 1; i < stroke.length; i++) {
+      const prev = stroke[i - 1];
+      const curr = stroke[i];
+      const startHalfWidth = this._getPointThickness(stroke, i - 1, halfPen);
+      const endHalfWidth = this._getPointThickness(stroke, i, halfPen);
+      const segmentPolygon = this._buildSegmentPolygon(prev, curr, startHalfWidth, endHalfWidth);
+      if (segmentPolygon.length >= 3) {
+        polygons.push(segmentPolygon);
+      }
     }
 
-    return this.strokes.filter((_, index) => this.selectedStrokeIndices.has(index));
+    const startCap = this._buildCapPolygon(stroke[0], this._getPointThickness(stroke, 0, halfPen));
+    const endCap = this._buildCapPolygon(stroke[stroke.length - 1], this._getPointThickness(stroke, stroke.length - 1, halfPen));
+    if (startCap.length >= 3) polygons.push(startCap);
+    if (endCap.length >= 3) polygons.push(endCap);
+
+    return polygons;
   }
 
-  _buildStrokePolygon(stroke, halfPen) {
-    const topPoints = [];
-    const bottomPoints = [];
+  _buildSegmentPolygon(start, end, startHalfWidth, endHalfWidth) {
+    const normal = this._getSegmentNormal(start, end);
+    return this._dedupePolygon([
+      { x: start.x + normal.x * startHalfWidth, y: start.y + normal.y * startHalfWidth },
+      { x: end.x + normal.x * endHalfWidth, y: end.y + normal.y * endHalfWidth },
+      { x: end.x - normal.x * endHalfWidth, y: end.y - normal.y * endHalfWidth },
+      { x: start.x - normal.x * startHalfWidth, y: start.y - normal.y * startHalfWidth },
+    ]);
+  }
 
-    for (let i = 0; i < stroke.length; i++) {
-      const point = stroke[i];
-      const thickness = this._getPointThickness(stroke, i, halfPen);
-      const normal = this._getJoinNormal(stroke, i);
-      const joinScale = this._getJoinScale(stroke, i, normal, thickness);
-
-      topPoints.push({
-        x: point.x + normal.x * joinScale,
-        y: point.y + normal.y * joinScale,
-      });
-      bottomPoints.push({
-        x: point.x - normal.x * joinScale,
-        y: point.y - normal.y * joinScale,
+  _buildCapPolygon(center, radius) {
+    const sides = 12;
+    const points = [];
+    for (let i = 0; i < sides; i++) {
+      const angle = (Math.PI * 2 * i) / sides;
+      points.push({
+        x: center.x + Math.cos(angle) * radius,
+        y: center.y + Math.sin(angle) * radius,
       });
     }
-
-    return this._dedupePolygon([...topPoints, ...bottomPoints.reverse()]);
+    return this._dedupePolygon(points);
   }
 
   _getPointThickness(stroke, index, halfPen) {
@@ -894,6 +954,23 @@ export class DrawingCanvas {
     }
 
     return deduped;
+  }
+
+  _normalizePolygonWinding(points) {
+    if (points.length < 3) return points;
+    return this._getPolygonSignedArea(points) < 0
+      ? [...points].reverse()
+      : points;
+  }
+
+  _getPolygonSignedArea(points) {
+    let area = 0;
+    for (let i = 0; i < points.length; i++) {
+      const current = points[i];
+      const next = points[(i + 1) % points.length];
+      area += current.x * next.y - next.x * current.y;
+    }
+    return area / 2;
   }
 
   hasContent() {

@@ -1,5 +1,5 @@
 /**
- * preview-modal.js — text preview modal for composed glyphs
+ * preview-modal.js - text preview modal for composed glyphs
  */
 
 import {
@@ -15,7 +15,7 @@ import { deriveAll } from '../../core/jamo-derive.js';
  */
 export function showPreviewModal(app, options = {}) {
   const fullLib = deriveAll(app.jamoLib);
-  const defaultPreviewText = options.initialText || '가나다라마바사\n아자차카타파하\n손글씨 폰트 테스트';
+  const defaultPreviewText = options.initialText || '가나다라마바사\n아자차카타파하\n내 손글씨 폰트 테스트';
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
@@ -75,7 +75,7 @@ export function showPreviewModal(app, options = {}) {
     if (note) {
       note.textContent = autoSpacingInput?.checked
         ? '글자 외곽 여백을 읽어 자간을 보정합니다. 문장 다듬기는 오프라인 규칙 기반 보정입니다.'
-        : '자동 자간 보정이 꺼져 있습니다. 기본 간격 슬라이더만 적용됩니다.';
+        : '자동 자간 보정은 꺼져 있습니다. 기본 간격 슬라이더만 적용됩니다.';
     }
   };
 

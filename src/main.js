@@ -91,9 +91,7 @@ class FonttoApp {
     window.addEventListener('beforeunload', () => this._persistState());
   }
 
-  // ?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧
-  //  Step 1: ?쒕뵫 ?섏씠吏
-  // ?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧
+  // Step 1: Landing page
   _showLanding() {
     this.currentStep = 'landing';
     const app = document.getElementById('app');
@@ -116,22 +114,22 @@ class FonttoApp {
             </span>
             <h1 class="logo-text">Fontto</h1>
           </div>
-          <p class="landing-subtitle">내 손글씨를 한글 폰트로 만들어보세요.</p>
+          <p class="landing-subtitle">손글씨로 나만의 한글 폰트를 만들어보세요.</p>
           <div class="landing-features">
             <div class="feature-card">
               <span class="feature-icon">${REQUIRED_JAMO_COUNT}</span>
-              <h3>맥락별 자모 ${REQUIRED_JAMO_COUNT}개 쓰기</h3>
-              <p>같은 자모도 모음 방향·받침 유무에 따라 모양이 달라집니다. 맥락별로 한 번씩 쓰면 나머지 글자는 자동 생성됩니다.</p>
+              <h3>필수 자모 ${REQUIRED_JAMO_COUNT}개 그리기</h3>
+              <p>같은 자모도 모음 방향과 받침 유무에 따라 모양이 달라집니다. 맥락별로 한 번씩만 그리면 나머지 글자는 자동 생성됩니다.</p>
             </div>
             <div class="feature-card">
               <span class="feature-icon">AUTO</span>
               <h3>글자 자동 조합</h3>
-              <p>초성, 중성, 종성을 글자 구조에 맞게 조합해 완성형 글자를 만듭니다.</p>
+              <p>초성, 중성, 종성의 구조에 맞춰 조합해서 완성형 글자를 만들어줍니다.</p>
             </div>
             <div class="feature-card">
               <span class="feature-icon">TTF</span>
               <h3>TTF 다운로드</h3>
-              <p>생성된 한글 글자 세트를 검수하고 TTF 파일로 내보내세요.</p>
+              <p>생성된 폰트 결과를 검토하고 TTF 파일로 내보내세요.</p>
             </div>
           </div>
           <div class="landing-start-actions">
@@ -164,7 +162,7 @@ class FonttoApp {
       <div class="editor-layout draw-mode" id="editorLayout">
         <header class="editor-header">
           <div class="header-left">
-            <span class="header-logo">Fontto</span>
+            <button class="header-logo" id="headerHomeBtn" type="button">Fontto</button>
             <div class="mode-switch" role="tablist" aria-label="입력 방식">
               <button class="mode-switch-btn" id="drawModeBtn" type="button">직접 그리기</button>
               <button class="mode-switch-btn" id="templateModeBtn" type="button">템플릿</button>
@@ -175,9 +173,9 @@ class FonttoApp {
           </div>
           <div class="header-right">
             <button class="header-btn" id="undoActionBtn" disabled>이전 작업</button>
-            <button class="header-btn" id="redoActionBtn" disabled>앞으로</button>
-            <button class="header-btn is-hidden" id="returnToReviewBtn">전체 검수로 돌아가기</button>
-            <button class="header-btn" id="reviewBtn" disabled>전체 글자 검수</button>
+            <button class="header-btn" id="redoActionBtn" disabled>다시 실행</button>
+            <button class="header-btn is-hidden" id="returnToReviewBtn">전체 검토로 돌아가기</button>
+            <button class="header-btn" id="reviewBtn" disabled>전체 글자 검토</button>
             <button class="header-btn" id="previewBtn">미리보기</button>
             <button class="header-btn primary" id="generateBtn" disabled>폰트 생성</button>
           </div>
@@ -207,7 +205,7 @@ class FonttoApp {
           <section class="template-page-header">
             <div>
               <h2>템플릿으로 가져오기</h2>
-              <p>PNG 템플릿에 필요한 글자를 한 번에 쓰고 업로드한 뒤, 추출된 글자 카드에서 필요한 획을 선택해 글자 카드에 적용하세요.</p>
+              <p>PNG 템플릿에 필요한 글자를 한 번에 쓰고 업로드한 뒤, 추출된 글자 카드에서 필요한 부분을 선택해 입력 카드에 적용하세요.</p>
             </div>
             <div class="template-actions">
               <button class="gen-btn" id="templatePageDownloadBtn">A4 PDF 템플릿 다운로드</button>
@@ -319,6 +317,9 @@ class FonttoApp {
     // Button events
     document.getElementById('drawModeBtn').addEventListener('click', () => {
       this._setEditorMode('draw');
+    });
+    document.getElementById('headerHomeBtn').addEventListener('click', () => {
+      this._showLanding();
     });
     document.getElementById('templateModeBtn').addEventListener('click', () => {
       this._setEditorMode('template');
@@ -2883,6 +2884,12 @@ class FonttoApp {
     return chars;
   }
 
+  _restoreDeletedSyllablesForTargets(targets = []) {
+    const chars = this._getAffectedCharsForTargets(targets);
+    if (!chars.length) return;
+    chars.forEach((char) => this._restoreDeletedSyllable(char));
+  }
+
   _focusAppliedGlyphCard(preferredChar = '', targets = []) {
     const focusChar = decomposeChar(preferredChar)
       ? preferredChar
@@ -2922,6 +2929,7 @@ class FonttoApp {
       });
     });
 
+    this._restoreDeletedSyllablesForTargets(appliedTargets);
     this.pendingParts = {};
     this._persistState();
     const fullLib = deriveAll(this.jamoLib);
@@ -3116,11 +3124,34 @@ class FonttoApp {
   _deleteSyllableCard(char) {
     if (!char) return false;
 
+    const info = decomposeChar(char);
     const overrides = loadSyllableOverrides();
     const hadOverride = Boolean(overrides?.[char]);
     const hadImport = Boolean(this.syllableImports?.[char]);
+    let hadStoredInputs = false;
 
-    if (!hadOverride && !hadImport) {
+    if (info) {
+      const targets = this._getEditTargetsForSyllable(info.cho, info.jung, info.jong);
+      targets.forEach((target) => {
+        const selection = this._getSelectionForTarget(target.categoryId, target.jamo);
+        if (!selection) return;
+
+        const storageKeys = this._getContextStorageKeysForSelection(selection);
+        storageKeys.forEach((storageKey) => {
+          if (!this.jamoLib[storageKey]?.length) return;
+          hadStoredInputs = true;
+          delete this.jamoLib[storageKey];
+        });
+
+        const draftKey = `${selection.categoryId}_${selection.jamo}`;
+        if (this.jamoDrafts[draftKey]) {
+          hadStoredInputs = true;
+          delete this.jamoDrafts[draftKey];
+        }
+      });
+    }
+
+    if (!hadOverride && !hadImport && !hadStoredInputs) {
       showToast(`${char} 글자 카드에서 삭제할 저장 데이터가 없습니다.`, 'warning', 2200);
       return false;
     }
@@ -3139,6 +3170,9 @@ class FonttoApp {
     deleted.add(char);
     saveDeletedSyllables([...deleted]);
 
+    this.jamoGrid?.setCompletedMap(this._getCompletedMapFromLib());
+    this._checkGenerateReady();
+    this._persistState();
     this._refreshGlyphViews();
     showToast(`${char} 글자 카드 데이터를 삭제했습니다.`, 'success', 2200);
     return true;
@@ -3335,7 +3369,7 @@ class FonttoApp {
     if (!report?.hasContent) {
       panel.className = 'quality-panel';
       panel.innerHTML = `
-        <div class="quality-summary">저장 전에 크기와 넘침 상태를 확인하려면 가이드 안에 그려주세요.</div>
+        <div class="quality-summary">가이드 안에 그린 뒤 품질 상태를 확인하세요.</div>
       `;
       return;
     }
@@ -3377,15 +3411,15 @@ class FonttoApp {
   _getQualityWarningMessage(warning) {
     switch (warning?.code) {
       case 'too_small':
-        return '대상 영역에 비해 그림이 너무 작습니다. 더 크게 그려보세요.';
+        return '가이드 영역에 비해 그림이 너무 작습니다. 더 크게 그려보세요.';
       case 'overflow':
-        return '획 일부가 가이드 영역 밖으로 나갔습니다. 박스 안에 맞춰주세요.';
+        return '일부 획이 가이드 영역 밖으로 나갔습니다. 박스 안에 맞춰주세요.';
       case 'low_stroke_detail':
-        return '획 데이터가 너무 적습니다. 입력이 제대로 기록됐는지 확인하세요.';
+        return '획 디테일이 너무 적습니다. 입력이 제대로 기록됐는지 확인하세요.';
       case 'off_center':
-        return '그림이 가이드 박스 중심에서 벗어났습니다. 저장 전에 가운데로 맞춰주세요.';
+        return '그림이 가이드 박스 중심에서 벗어났습니다. 가운데로 맞춰주세요.';
       case 'skewed_shape':
-        return '그림이 너무 얇은 영역에 몰려 있습니다. 가이드 위치를 확인하고 필요하면 다시 그리세요.';
+        return '그림이 한쪽 영역에 치우쳐 있습니다. 가이드 위치를 확인하고 필요하면 다시 그리세요.';
       default:
         return warning?.message || '저장하기 전에 그림 품질을 확인하세요.';
     }
@@ -3410,11 +3444,11 @@ class FonttoApp {
     overlay.innerHTML = `
       <div class="modal quality-confirm-modal">
         <div class="modal-header">
-          <h2>저장 확인</h2>
+          <h2>저장 전 확인</h2>
           <button class="modal-close" id="closeQualityConfirmModal">x</button>
         </div>
         <div class="modal-body quality-confirm-body">
-          <p class="quality-confirm-copy">이 그림은 글자 모양이 불안정하게 생성될 수 있습니다. 경고를 확인하거나 그대로 저장하세요.</p>
+          <p class="quality-confirm-copy">이 그림은 글자 모양이 불안정하게 생성될 수 있습니다. 경고를 확인하고 그대로 저장할지 결정하세요.</p>
           <ul class="quality-warnings">${warningItems}</ul>
           <div class="quality-confirm-actions">
             <button class="gen-btn" id="qualityConfirmCancelBtn">계속 수정</button>

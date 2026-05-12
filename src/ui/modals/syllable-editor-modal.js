@@ -170,7 +170,9 @@ export function showSyllableEditorModal(app, char) {
   });
 
   document.getElementById('syllableEditorSaveBtn').addEventListener('click', () => {
-    app?._restoreDeletedSyllable?.(char);
+    if (!isSyllableDeleted(char)) {
+      app?._restoreDeletedSyllable?.(char);
+    }
     overrides[char] = { ...current };
     saveOverrides(overrides);
     app?._refreshGlyphViews?.();
@@ -222,10 +224,16 @@ function renderPreview(ctx, char, info, fullLib, overrides) {
   ctx.stroke();
 
   if (isSyllableDeleted(char)) {
-    const deletedCommands = composeCharFromLib(char, fullLib);
-    if (deletedCommands.length > 0) {
-      drawGlyphOnCtx(ctx, deletedCommands, 0, 0, size);
-    }
+    ctx.save();
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.42)';
+    ctx.font = '600 18px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('삭제된 글자', size / 2, size / 2 - 12);
+    ctx.font = '13px sans-serif';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.28)';
+    ctx.fillText('복원 전까지 미리보기가 표시되지 않습니다.', size / 2, size / 2 + 18);
+    ctx.restore();
     return;
   }
 
