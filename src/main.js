@@ -6,10 +6,8 @@
  */
 
 import './index.css';
-import { DrawingCanvas } from './ui/drawing-canvas.js';
 import { JamoGrid, CATEGORIES, REQUIRED_JAMO_COUNT, buildGuideMeta } from './ui/jamo-grid.js';
 import { PreviewPanel } from './ui/preview-panel.js';
-import { Toolbar } from './ui/toolbar.js';
 import { deriveAll } from './core/jamo-derive.js';
 import {
   buildTemplateSvg,
@@ -35,7 +33,6 @@ import { showPreviewModal } from './ui/modals/preview-modal.js';
 import { showGenerateModal } from './ui/modals/generate-modal.js';
 import { showReviewModal, getDefaultReviewState } from './ui/modals/review-modal.js';
 import { showSyllableSplitModal } from './ui/modals/syllable-split-modal.js';
-import { showQualityConfirmModal } from './ui/modals/quality-confirm-modal.js';
 import { showSyllableEditorModal } from './ui/modals/syllable-editor-modal.js';
 
 const RECENT_REVIEW_LIMIT = 8;
@@ -59,11 +56,8 @@ class FonttoApp {
     this.reviewState = getDefaultReviewState();
     this.reviewReturnContext = null;
     this.recentEditedKeys = [];
-    this.currentSelectionKey = null;
-    this.drawingCanvas = null;
     this.jamoGrid = null;
     this.previewPanel = null;
-    this.toolbar = null;
     this.templateBrowserPanel = null;
     this.editorMode = 'draw';
     this.undoStack = [];
@@ -183,9 +177,6 @@ class FonttoApp {
               <button class="mode-switch-btn" id="templateModeBtn" type="button">템플릿</button>
             </div>
           </div>
-          <div class="header-center">
-            <span class="current-jamo-label" id="currentJamoLabel">입력할 항목을 선택하세요.</span>
-          </div>
           <div class="header-right">
             <button class="header-btn" id="undoActionBtn" disabled>이전 작업</button>
             <button class="header-btn" id="redoActionBtn" disabled>다시 실행</button>
@@ -200,22 +191,6 @@ class FonttoApp {
 
         <main class="editor-canvas-area">
           <section class="pending-parts-panel" id="pendingPartsPanel"></section>
-          <section class="manual-drawing-details">
-            <div class="manual-drawing-body">
-              <div class="manual-drawing-intro">
-                <div>
-                  <h2>고급 직접 그리기</h2>
-                  <p>템플릿에서 가져온 원본 글자만으로 부족할 때, 여기서 직접 획을 그리거나 다듬어 자모를 보완할 수 있습니다.</p>
-                </div>
-                <span class="manual-drawing-badge">보완 입력</span>
-              </div>
-              <div class="canvas-wrapper">
-                <canvas id="drawingCanvas"></canvas>
-              </div>
-              <div class="toolbar-area" id="toolbarContainer"></div>
-              <div class="quality-panel" id="qualityPanel"></div>
-            </div>
-          </section>
         </main>
 
         <aside class="editor-browser-area" id="browserContainer"></aside>
@@ -246,14 +221,6 @@ class FonttoApp {
     this._initEditor();
   }
   _initEditor() {
-    // Initialize drawing canvas
-    const canvasEl = document.getElementById('drawingCanvas');
-    this.drawingCanvas = new DrawingCanvas(canvasEl, {
-      penSize: 8,
-      onChange: (report) => this._updateQualityPanel(report),
-      onGuideRegionChange: (region) => this._handleGuideRegionChange(region),
-    });
-
     // Initialize jamo grid
     const gridContainer = document.getElementById('jamoGridContainer');
     this.jamoGrid = new JamoGrid(gridContainer, (catId, jamo, example, guide) => {
@@ -289,37 +256,6 @@ class FonttoApp {
     });
     this.templateBrowserPanel.updateJamoLib(deriveAll(this.jamoLib));
     this.templateBrowserPanel.updateSyllableImports(this.syllableImports);
-
-    // Initialize toolbar
-    const toolbarContainer = document.getElementById('toolbarContainer');
-    this.toolbar = new Toolbar(toolbarContainer, {
-      onUndo: () => this.drawingCanvas.undo(),
-      onRedo: () => this.drawingCanvas.redo(),
-      onClear: () => this.drawingCanvas.clear(),
-      onPenSize: (size) => this.drawingCanvas.setPenSize(size),
-      onVariableWidth: (v) => this.drawingCanvas.setVariableWidth(v),
-      onToggleGuideEdit: (enabled) => {
-        this.drawingCanvas.setGuideEditMode(enabled);
-        if (enabled) this.toolbar.setStrokeSelectMode(false);
-      },
-      onToggleStrokeSelect: (enabled) => {
-        this.drawingCanvas.setStrokeSelectMode(enabled);
-        if (enabled) this.toolbar.setGuideEditMode(false);
-      },
-      onKeepSelectedStrokes: () => this.drawingCanvas.keepSelectedStrokes(),
-      onDeleteSelectedStrokes: () => this.drawingCanvas.deleteSelectedStrokes(),
-      onSelectAllStrokes: () => this.drawingCanvas.selectAllStrokes(),
-      onClearStrokeSelection: () => this.drawingCanvas.clearStrokeSelection(),
-      onDuplicateSelectedStrokes: () => this.drawingCanvas.duplicateSelectedStrokes(),
-      onNudgeSelectedStrokes: (dx, dy) => this.drawingCanvas.nudgeSelectedStrokes(dx, dy),
-      onRotateSelectedStrokes: (degrees) => this.drawingCanvas.rotateSelectedStrokes(degrees),
-      onScaleSelectedStrokes: (scaleX, scaleY) => this.drawingCanvas.scaleSelectedStrokes(scaleX, scaleY),
-      onBringSelectedToFront: () => this.drawingCanvas.bringSelectedToFront(),
-      onSendSelectedToBack: () => this.drawingCanvas.sendSelectedToBack(),
-      onResetGuideBox: () => this._resetGuideRegionForCurrentSelection(),
-      onSave: () => this._saveCurrentPart(),
-      onNext: () => this._savePartAndNext(),
-    });
 
     // Button events
     document.getElementById('drawModeBtn').addEventListener('click', () => {
@@ -376,7 +312,6 @@ class FonttoApp {
     const templatePage = document.getElementById('templatePage');
     const drawButton = document.getElementById('drawModeBtn');
     const templateButton = document.getElementById('templateModeBtn');
-    const label = document.getElementById('currentJamoLabel');
 
     layout?.classList.toggle('draw-mode', this.editorMode === 'draw');
     layout?.classList.toggle('template-mode', this.editorMode === 'template');
@@ -386,19 +321,8 @@ class FonttoApp {
     drawButton?.setAttribute('aria-selected', String(this.editorMode === 'draw'));
     templateButton?.setAttribute('aria-selected', String(this.editorMode === 'template'));
 
-    if (label && this.editorMode === 'template') {
-      label.textContent = '템플릿을 다운로드하고 작성한 이미지를 업로드하세요.';
-    } else if (label && this.jamoGrid?.getCurrentSelection()) {
-      const sel = this.jamoGrid.getCurrentSelection();
-      const cat = CATEGORIES.find((c) => c.id === sel.categoryId);
-      label.textContent = sel.guide?.label
-        ? `${cat?.label || ''} - ${sel.guide.label} - "${sel.example}"`
-        : `${cat?.label || ''} - "${sel.example}" - ${sel.jamo}`;
-    }
-
     if (this.editorMode === 'draw') {
       requestAnimationFrame(() => {
-        this.drawingCanvas?.resize();
         this.previewPanel?.resize?.();
         this.browserPanel?.resize?.();
         this.templateBrowserPanel?.resize?.();
@@ -540,21 +464,6 @@ class FonttoApp {
     );
     this._renderPendingPartsPanel();
     this._checkGenerateReady();
-
-    const selection = this.jamoGrid?.getCurrentSelection();
-    if (selection && this.drawingCanvas) {
-      const key = `${selection.categoryId}_${selection.jamo}`;
-      const draft = this.jamoDrafts[key];
-      if (draft?.strokes?.length) {
-        this.drawingCanvas.loadStrokes(draft.strokes);
-      } else if (draft?.importedStrokes?.length) {
-        this.drawingCanvas.loadStrokes(draft.importedStrokes);
-      } else {
-        this.drawingCanvas.clear();
-      }
-      this.drawingCanvas.setGuide(this._applyGuideOverride(selection.categoryId, key, selection.guide));
-      this._updateQualityPanel(this.drawingCanvas.getQualityReport());
-    }
   }
 
   _renderPendingPartsPanel() {
@@ -710,28 +619,7 @@ class FonttoApp {
 
 
 
-  _onJamoSelect(catId, jamo, example, guide) {
-    const label = document.getElementById('currentJamoLabel');
-    if (label) {
-      const cat = CATEGORIES.find((c) => c.id === catId);
-      label.textContent = guide?.label
-        ? `${cat?.label || ''} - ${guide.label} - "${example}"`
-        : `${cat?.label || ''} - "${example}" - ${jamo}`;
-    }
-
-    const key = `${catId}_${jamo}`;
-    this.currentSelectionKey = this._getGuideOverrideKey(catId, key, guide);
-    const draft = this.jamoDrafts[key];
-    if (draft?.strokes?.length) {
-      this.drawingCanvas.loadStrokes(draft.strokes);
-    } else if (draft?.importedStrokes?.length) {
-      this.drawingCanvas.loadStrokes(draft.importedStrokes);
-    } else {
-      this.drawingCanvas.clear();
-    }
-    this.drawingCanvas.setGuide(this._applyGuideOverride(catId, key, guide ?? { char: example }));
-    this._updateQualityPanel(this.drawingCanvas.getQualityReport());
-  }
+  _onJamoSelect() {}
 
   _jumpToGlyphEdit(char) {
     const info = decomposeChar(char);
@@ -770,67 +658,6 @@ class FonttoApp {
       return;
     }
     showSyllableEditorModal(this, char);
-  }
-
-  _getCurrentDrawingSelection() {
-    const sel = this.jamoGrid?.getCurrentSelection();
-    if (!sel) return null;
-    const key = `${sel.categoryId}_${sel.jamo}`;
-    return {
-      ...sel,
-      guide: this._applyGuideOverride(sel.categoryId, key, sel.guide),
-    };
-  }
-
-  _saveCurrentPart(options = {}) {
-    const sel = this._getCurrentDrawingSelection();
-    if (!sel) return false;
-
-    if (!this.drawingCanvas.hasContent()) return false;
-
-    const qualityReport = this.drawingCanvas.getQualityReport();
-
-    if (!options.force && qualityReport.hasBlockingWarnings) {
-      this._showQualityConfirmModal(qualityReport, () => {
-        this._saveCurrentPart({ ...options, force: true });
-      });
-      return false;
-    }
-
-    const selectedOnly = this.drawingCanvas.getSelectedStrokeCount() > 0;
-    const commands = this.drawingCanvas.toPathCommands({
-      targetRegion: sel.guide?.targetRegion,
-      selectedOnly,
-    });
-    const strokes = this.drawingCanvas.exportStrokes({ selectedOnly });
-    if (!commands.length) {
-      showToast('이 그림은 재사용 가능한 부분으로 변환할 수 없습니다.', 'warning', 2600);
-      return false;
-    }
-
-    this._recordHistory('부분 저장');
-    this._storePendingSelection(sel, commands, strokes, 'manual');
-    this._renderPendingPartsPanel();
-
-    if (qualityReport.warnings.length > 0) {
-      this._showQualityToast(qualityReport.warnings);
-    } else if (!options.advance) {
-      showToast('부분을 저장된 부분 패널에 추가했습니다.', 'success', 2200);
-    }
-
-    if (options.advance) {
-      this.drawingCanvas.clear();
-      const next = this.jamoGrid.goToNext();
-      if (!next) {
-        this._showCompleteToast();
-      }
-    }
-
-    return true;
-  }
-
-  _savePartAndNext() {
-    this._saveCurrentPart({ advance: true });
   }
 
   _checkGenerateReady() {
@@ -2370,7 +2197,13 @@ class FonttoApp {
       button.className = `tool-btn template-target-btn ${state.activeTargetIndex === index ? 'active' : ''} ${stored ? 'completed' : ''}`;
       const count = [...state.assignments.values()].filter((targetIndex) => targetIndex === index).length;
       const status = stored ? '완료' : '미완료';
-      button.textContent = count > 0 ? `${target.label} (${count}) · ${status}` : `${target.label} · ${status}`;
+      button.innerHTML = `
+        <span class="template-target-btn-top">
+          <span class="template-target-status ${stored ? 'is-complete' : 'is-pending'}">${status}</span>
+          <span class="template-target-count">${count > 0 ? `획 ${count}개 연결` : '연결 없음'}</span>
+        </span>
+        <span class="template-target-name">${target.label}</span>
+      `;
       button.addEventListener('click', () => {
         if (state.selectedComponentIds?.size) {
           this._assignSelectedComponentsToTarget(state, index);
@@ -2406,7 +2239,53 @@ class FonttoApp {
 
     const list = document.createElement('div');
     list.className = 'template-component-list-grid';
+    const targetRegions = state.targets.map((target, index) => {
+      const selection = this._getSelectionForTarget(target.categoryId, target.jamo);
+      return {
+        index,
+        region: selection?.guide?.targetRegion ?? null,
+      };
+    });
+    const getComponentSortMeta = (component) => {
+      const assignedTargetIndex = state.assignments.get(component.id);
+      if (assignedTargetIndex !== undefined) {
+        return {
+          targetIndex: assignedTargetIndex,
+          overlap: Number.POSITIVE_INFINITY,
+        };
+      }
+
+      const componentBox = this._componentBoundsToUnitRect(
+        component.bounds,
+        state.extracted.width,
+        state.extracted.height
+      );
+
+      const ranked = targetRegions
+        .filter((item) => item.region)
+        .map((item) => ({
+          targetIndex: item.index,
+          overlap: this._rectOverlapArea(componentBox, item.region),
+          centerInside: this._rectCenterInside(componentBox, item.region),
+        }))
+        .sort((a, b) => {
+          if (a.centerInside !== b.centerInside) return a.centerInside ? -1 : 1;
+          return b.overlap - a.overlap;
+        });
+
+      const best = ranked[0];
+      return {
+        targetIndex: best?.targetIndex ?? Number.POSITIVE_INFINITY,
+        overlap: best?.overlap ?? 0,
+      };
+    };
+
     const components = [...state.extracted.components].sort((a, b) => {
+      const aMeta = getComponentSortMeta(a);
+      const bMeta = getComponentSortMeta(b);
+      if (aMeta.targetIndex !== bMeta.targetIndex) return aMeta.targetIndex - bMeta.targetIndex;
+      if (aMeta.overlap !== bMeta.overlap) return bMeta.overlap - aMeta.overlap;
+
       const rowDiff = a.bounds.minY - b.bounds.minY;
       if (Math.abs(rowDiff) > 24) return rowDiff;
       return a.bounds.minX - b.bounds.minX;
@@ -3246,7 +3125,6 @@ class FonttoApp {
 
 
   _handleResize() {
-    if (this.drawingCanvas) this.drawingCanvas.resize();
     if (this.previewPanel) this.previewPanel.resize();
     if (this.browserPanel) this.browserPanel.resize();
     if (this.templateBrowserPanel) this.templateBrowserPanel.resize();
@@ -3352,7 +3230,6 @@ class FonttoApp {
     this.reviewState = getDefaultReviewState();
     this.reviewReturnContext = null;
     this.recentEditedKeys = [];
-    this.currentSelectionKey = null;
     this._generatedBuffer = null;
     this._generatedFontName = '';
     this.undoStack = [];
@@ -3428,55 +3305,6 @@ class FonttoApp {
     this._persistState();
   }
 
-  _applyGuideOverride(categoryId, itemKey, guide) {
-    if (!guide) return guide;
-    const overrideKey = this._getGuideOverrideKey(categoryId, itemKey, guide);
-    const override = guide.overrideScope === 'item'
-      ? this.guideOverrides[overrideKey]
-      : this.guideOverrides[overrideKey] || this.guideOverrides[itemKey];
-    if (!override) return guide;
-
-    return {
-      ...guide,
-      targetRegion: { ...override },
-    };
-  }
-
-  _handleGuideRegionChange(region) {
-    if (!this.currentSelectionKey) return;
-
-    this._recordHistory('가이드 박스 조정');
-    if (region) {
-      this.guideOverrides[this.currentSelectionKey] = { ...region };
-    } else {
-      delete this.guideOverrides[this.currentSelectionKey];
-    }
-
-    this._persistState();
-  }
-
-  _resetGuideRegionForCurrentSelection() {
-    const selection = this.jamoGrid?.getCurrentSelection();
-    if (!selection) return;
-
-    const overrideKey = this._getGuideOverrideKey(
-      selection.categoryId,
-      `${selection.categoryId}_${selection.jamo}`,
-      selection.guide
-    );
-    if (!this.guideOverrides[overrideKey]) return;
-
-    this._recordHistory('가이드 박스 초기화');
-    delete this.guideOverrides[overrideKey];
-    this._persistState();
-    this.drawingCanvas.resetGuideTargetRegion(false);
-    showToast('대상 박스를 기본 가이드로 초기화했습니다.', 'success', 1800);
-  }
-
-  _getGuideOverrideKey(categoryId, itemKey, guide) {
-    return guide?.overrideScope === 'item' ? itemKey : categoryId;
-  }
-
   _getStorageKeysForSelection(selection) {
     const keys = selection?.guide?.storageKeys?.length
       ? selection.guide.storageKeys
@@ -3519,117 +3347,6 @@ class FonttoApp {
         return completedMap;
       }, {});
   }
-
-  _updateQualityPanel(report) {
-    const panel = document.getElementById('qualityPanel');
-    if (!panel) return;
-
-    if (!report?.hasContent) {
-      panel.className = 'quality-panel';
-      panel.innerHTML = `
-        <div class="quality-summary">가이드 안에 그린 뒤 품질 상태를 확인하세요.</div>
-      `;
-      return;
-    }
-
-    const metrics = report.metrics;
-    const warningItems = this._getQualityMessages(report.warnings)
-      .map((message) => `<li>${message}</li>`)
-      .join('');
-    const panelState = report.hasBlockingWarnings
-      ? 'is-danger'
-      : report.warnings.length > 0
-        ? 'is-warning'
-        : 'is-good';
-
-    panel.className = `quality-panel ${panelState}`;
-    panel.innerHTML = `
-      <div class="quality-summary">
-        <span>획 ${report.strokeCount}</span>
-        <span>점 ${report.pointCount}</span>
-        ${metrics
-          ? `<span>채움 ${Math.round(metrics.fillRatio * 100)}%</span>
-             <span>넘침 ${Math.round(metrics.overflowRatio * 100)}%</span>
-             <span>중심 ${Math.round(Math.max(metrics.centerOffsetX ?? 0, metrics.centerOffsetY ?? 0) * 100)}%</span>`
-          : '<span>자유 입력</span>'}
-      </div>
-      <div class="quality-message">
-        ${report.hasBlockingWarnings
-          ? '<strong>저장은 가능하지만 조합된 글자 모양이 불안정할 수 있습니다.</strong>'
-          : report.warnings.length > 0
-            ? '<strong>저장은 가능하지만 아래 항목을 수정하면 결과가 더 좋아집니다.</strong>'
-            : '<strong>현재 그림 상태가 안정적입니다.</strong>'}
-      </div>
-      ${report.warnings.length > 0
-        ? `<ul class="quality-warnings">${warningItems}</ul>`
-        : ''}
-    `;
-  }
-
-  _getQualityWarningMessage(warning) {
-    switch (warning?.code) {
-      case 'too_small':
-        return '가이드 영역에 비해 그림이 너무 작습니다. 더 크게 그려보세요.';
-      case 'overflow':
-        return '일부 획이 가이드 영역 밖으로 나갔습니다. 박스 안에 맞춰주세요.';
-      case 'low_stroke_detail':
-        return '획 디테일이 너무 적습니다. 입력이 제대로 기록됐는지 확인하세요.';
-      case 'off_center':
-        return '그림이 가이드 박스 중심에서 벗어났습니다. 가운데로 맞춰주세요.';
-      case 'skewed_shape':
-        return '그림이 한쪽 영역에 치우쳐 있습니다. 가이드 위치를 확인하고 필요하면 다시 그리세요.';
-      default:
-        return warning?.message || '저장하기 전에 그림 품질을 확인하세요.';
-    }
-  }
-
-  _getQualityMessages(warnings = []) {
-    return [...new Set(warnings.map((warning) => this._getQualityWarningMessage(warning)))];
-  }
-
-  _showQualityToast(warnings) {
-    const uniqueMessages = this._getQualityMessages(warnings);
-    showToast(`저장했습니다. ${uniqueMessages.join(' / ')}`, 'warning', 4200);
-  }
-
-  _showQualityConfirmModal(report, onConfirm) {
-    const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay';
-    const warningItems = this._getQualityMessages(report.warnings)
-      .map((message) => `<li>${message}</li>`)
-      .join('');
-
-    overlay.innerHTML = `
-      <div class="modal quality-confirm-modal">
-        <div class="modal-header">
-          <h2>저장 전 확인</h2>
-          <button class="modal-close" id="closeQualityConfirmModal">x</button>
-        </div>
-        <div class="modal-body quality-confirm-body">
-          <p class="quality-confirm-copy">이 그림은 글자 모양이 불안정하게 생성될 수 있습니다. 경고를 확인하고 그대로 저장할지 결정하세요.</p>
-          <ul class="quality-warnings">${warningItems}</ul>
-          <div class="quality-confirm-actions">
-            <button class="gen-btn" id="qualityConfirmCancelBtn">계속 수정</button>
-            <button class="gen-btn download-btn" id="qualityConfirmSaveBtn">그대로 저장</button>
-          </div>
-        </div>
-      </div>
-    `;
-
-    document.body.appendChild(overlay);
-
-    const close = () => overlay.remove();
-    overlay.addEventListener('click', (event) => {
-      if (event.target === overlay) close();
-    });
-    document.getElementById('closeQualityConfirmModal')?.addEventListener('click', close);
-    document.getElementById('qualityConfirmCancelBtn')?.addEventListener('click', close);
-    document.getElementById('qualityConfirmSaveBtn')?.addEventListener('click', () => {
-      close();
-      onConfirm?.();
-    });
-  }
-
 
 }
 
