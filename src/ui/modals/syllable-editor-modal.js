@@ -1,16 +1,24 @@
 /**
- * syllable-editor-modal.js — per-syllable fine-tuning editor
+ * syllable-editor-modal.js - per-syllable fine-tuning editor
  *
  * Allows users to adjust cho/jung/jong offsets and scales for individual syllables,
  * producing an override that is applied on top of the standard composition.
  */
 
-import { decomposeChar, drawGlyphOnCtx, composeCharFromLib, isSyllableDeleted } from '../../core/glyph-utils.js';
+import { decomposeChar, drawGlyphOnCtx, isSyllableDeleted } from '../../core/glyph-utils.js';
 import { deriveAll } from '../../core/jamo-derive.js';
 import { composeSyllable, composeSyllableParts } from '../../core/composer.js';
 import { showToast } from '../toast.js';
 
 const OVERRIDE_STORAGE_KEY = 'fontto-syllable-overrides-v1';
+
+function createDefaultOverride() {
+  return {
+    cho: { dx: 0, dy: 0, sx: 1, sy: 1 },
+    jung: { dx: 0, dy: 0, sx: 1, sy: 1 },
+    jong: { dx: 0, dy: 0, sx: 1, sy: 1 },
+  };
+}
 
 export function loadOverrides() {
   try {
@@ -36,57 +44,57 @@ export function applyOverrideToCommands(commands, override) {
 
   let sumX = 0;
   let sumY = 0;
-  let n = 0;
+  let count = 0;
   for (const cmd of commands) {
     if (cmd.x !== undefined && cmd.y !== undefined) {
       sumX += cmd.x;
       sumY += cmd.y;
-      n += 1;
+      count += 1;
     }
   }
-  const cx = n > 0 ? sumX / n : 500;
-  const cy = n > 0 ? sumY / n : 500;
+  const cx = count > 0 ? sumX / count : 500;
+  const cy = count > 0 ? sumY / count : 500;
+
+  const transform = (x, y) => ({
+    x: Math.round((x - cx) * sx + cx + dx),
+    y: Math.round((y - cy) * sy + cy + dy),
+  });
 
   return commands.map((cmd) => {
-    const out = { type: cmd.type };
-    const transform = (x, y) => ({
-      x: Math.round((x - cx) * sx + cx + dx),
-      y: Math.round((y - cy) * sy + cy + dy),
-    });
-
+    const next = { type: cmd.type };
     if (cmd.x !== undefined && cmd.y !== undefined) {
-      const { x, y } = transform(cmd.x, cmd.y);
-      out.x = x;
-      out.y = y;
+      const point = transform(cmd.x, cmd.y);
+      next.x = point.x;
+      next.y = point.y;
     }
     if (cmd.x1 !== undefined && cmd.y1 !== undefined) {
-      const { x, y } = transform(cmd.x1, cmd.y1);
-      out.x1 = x;
-      out.y1 = y;
+      const point = transform(cmd.x1, cmd.y1);
+      next.x1 = point.x;
+      next.y1 = point.y;
     }
     if (cmd.x2 !== undefined && cmd.y2 !== undefined) {
-      const { x, y } = transform(cmd.x2, cmd.y2);
-      out.x2 = x;
-      out.y2 = y;
+      const point = transform(cmd.x2, cmd.y2);
+      next.x2 = point.x;
+      next.y2 = point.y;
     }
-    return out;
+    return next;
   });
 }
 
 export function showSyllableEditorModal(app, char) {
   const info = decomposeChar(char);
   if (!info) {
-    showToast('올바른 한글 음절을 입력하세요.', 'warning');
+    showToast('올바른 한글 음절을 선택하세요.', 'warning');
     return;
   }
 
   const overrides = loadOverrides();
-  const current = overrides[char] || {
-    cho: { dx: 0, dy: 0, sx: 1, sy: 1 },
-    jung: { dx: 0, dy: 0, sx: 1, sy: 1 },
-    jong: { dx: 0, dy: 0, sx: 1, sy: 1 },
+  const saved = overrides[char] || createDefaultOverride();
+  const current = {
+    cho: { ...saved.cho },
+    jung: { ...saved.jung },
+    jong: { ...saved.jong },
   };
-
   const fullLib = deriveAll(app.jamoLib);
 
   const overlay = document.createElement('div');
@@ -108,6 +116,7 @@ export function showSyllableEditorModal(app, char) {
           <div class="syllable-editor-actions">
             <button class="tool-btn" id="syllableEditorDeleteBtn">삭제</button>
             <button class="gen-btn" id="syllableEditorResetBtn">초기화</button>
+            <button class="gen-btn" id="syllableEditorApplyRelatedBtn">관련 카드 전체 적용</button>
             <button class="gen-btn download-btn" id="syllableEditorSaveBtn">조정값 저장</button>
           </div>
         </div>
@@ -134,7 +143,7 @@ export function showSyllableEditorModal(app, char) {
     ['dx', 'dy', 'sx', 'sy'].forEach((prop) => {
       const slider = document.getElementById(`se-${part}-${prop}`);
       const label = document.getElementById(`se-${part}-${prop}-val`);
-      if (!slider || !label) return;
+      if (!slider || !label || !current[part]) return;
 
       slider.addEventListener('input', () => {
         const value = parseFloat(slider.value);
@@ -158,6 +167,7 @@ export function showSyllableEditorModal(app, char) {
 
   document.getElementById('syllableEditorResetBtn').addEventListener('click', () => {
     ['cho', 'jung', 'jong'].forEach((part) => {
+      if (!current[part]) return;
       current[part] = { dx: 0, dy: 0, sx: 1, sy: 1 };
       ['dx', 'dy', 'sx', 'sy'].forEach((prop) => {
         const slider = document.getElementById(`se-${part}-${prop}`);
@@ -170,13 +180,34 @@ export function showSyllableEditorModal(app, char) {
   });
 
   document.getElementById('syllableEditorSaveBtn').addEventListener('click', () => {
-    if (!isSyllableDeleted(char)) {
-      app?._restoreDeletedSyllable?.(char);
-    }
-    overrides[char] = { ...current };
+    app?._restoreDeletedSyllable?.(char);
+    overrides[char] = {
+      cho: { ...current.cho },
+      jung: { ...current.jung },
+      jong: { ...current.jong },
+    };
     saveOverrides(overrides);
     app?._refreshGlyphViews?.();
     showToast(`${char} 조정값을 저장했습니다.`, 'success', 2000);
+    render();
+  });
+
+  document.getElementById('syllableEditorApplyRelatedBtn').addEventListener('click', () => {
+    app?._restoreDeletedSyllable?.(char);
+    overrides[char] = {
+      cho: { ...current.cho },
+      jung: { ...current.jung },
+      jong: { ...current.jong },
+    };
+    saveOverrides(overrides);
+
+    const result = app?._applySyllableOverrideToRelatedCards?.(char, current);
+    if (!result?.applied) {
+      showToast('관련 글자 카드를 찾지 못했습니다.', 'warning', 2200);
+      return;
+    }
+
+    showToast(`${result.applied}개의 관련 글자 카드에 조정값을 적용했습니다.`, 'success', 2400);
     render();
   });
 
@@ -232,14 +263,13 @@ function renderPreview(ctx, char, info, fullLib, overrides) {
     ctx.fillText('삭제된 글자', size / 2, size / 2 - 12);
     ctx.font = '13px sans-serif';
     ctx.fillStyle = 'rgba(255, 255, 255, 0.28)';
-    ctx.fillText('복원 전까지 미리보기가 표시되지 않습니다.', size / 2, size / 2 + 18);
+    ctx.fillText('복원 후 다시 미세 조정할 수 있습니다.', size / 2, size / 2 + 18);
     ctx.restore();
     return;
   }
 
   const commands = composeSyllable(info.cho, info.jung, info.jong, fullLib);
   const parts = composeSyllableParts(info.cho, info.jung, info.jong, fullLib);
-
   const allCommands = [
     ...applyOverrideToCommands(parts.cho, overrides.cho),
     ...applyOverrideToCommands(parts.jung, overrides.jung),

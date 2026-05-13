@@ -12,6 +12,9 @@ import { loadSyllableOverrides, composeSyllableWithOverride } from './glyph-util
 const UPM = 1000;
 const ASCENDER = 800;
 const DESCENDER = -200;
+const MAX_GLYPH_COMMANDS = 6000;
+const MAX_GLYPH_CONTOURS = 1200;
+const GENERATION_YIELD_INTERVAL = 96;
 
 function roundCoord(value) {
   return Math.round(value * 10) / 10;
@@ -115,12 +118,67 @@ function sanitizeCommands(commands = []) {
   return sanitized;
 }
 
+function getGlyphComplexity(commands = []) {
+  let contourCount = 0;
+  let pointCount = 0;
+
+  for (const cmd of commands) {
+    if (!cmd?.type) continue;
+    if (cmd.type === 'M') contourCount += 1;
+    if (cmd.type === 'L' || cmd.type === 'Q' || cmd.type === 'C') pointCount += 1;
+  }
+
+  return {
+    commandCount: commands.length,
+    contourCount,
+    pointCount,
+  };
+}
+
+function shouldSkipComplexGlyph(complexity) {
+  return complexity.commandCount > MAX_GLYPH_COMMANDS || complexity.contourCount > MAX_GLYPH_CONTOURS;
+}
+
+function getSkipReason(complexity) {
+  if (complexity.commandCount > MAX_GLYPH_COMMANDS) {
+    return `command count ${complexity.commandCount} exceeds ${MAX_GLYPH_COMMANDS}`;
+  }
+  if (complexity.contourCount > MAX_GLYPH_CONTOURS) {
+    return `contour count ${complexity.contourCount} exceeds ${MAX_GLYPH_CONTOURS}`;
+  }
+  return 'unknown complexity limit';
+}
+
+function createEmptyGlyph(name, unicode, advanceWidth = UPM) {
+  return new opentype.Glyph({
+    name,
+    unicode,
+    advanceWidth,
+    path: new opentype.Path(),
+  });
+}
+
+async function yieldToBrowser() {
+  await new Promise((resolve) => {
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(() => resolve());
+      return;
+    }
+    setTimeout(resolve, 0);
+  });
+}
+
 /**
  * 커맨드 배열 → opentype.Glyph
  */
 function createGlyph(name, unicode, commands, advanceWidth = UPM) {
   const path = new opentype.Path();
   const safeCommands = sanitizeCommands(commands);
+  const complexity = getGlyphComplexity(safeCommands);
+
+  if (shouldSkipComplexGlyph(complexity)) {
+    return createEmptyGlyph(name, unicode, advanceWidth);
+  }
 
   for (const cmd of safeCommands) {
     switch (cmd.type) {
@@ -148,7 +206,7 @@ function createGlyph(name, unicode, commands, advanceWidth = UPM) {
  * @param {Function} onProgress — 진행률 콜백 (0~1)
  * @returns {ArrayBuffer} TTF 바이너리
  */
-export function generateFont(jamoLib, fontName = 'MyHandwritingFont', onProgress = null) {
+export async function generateFont(jamoLib, fontName = 'MyHandwritingFont', onProgress = null) {
   // 1. 자모 파생 (쌍자음, 복합모음, 겹받침)
   const fullLib = deriveAll(jamoLib);
   const syllableOverrides = loadSyllableOverrides();
@@ -170,8 +228,10 @@ export function generateFont(jamoLib, fontName = 'MyHandwritingFont', onProgress
   });
 
   const glyphs = [notdefGlyph, spaceGlyph];
+  const skippedGlyphs = [];
   let count = 0;
   const total = 19 * 21 * 28; // 11172
+  let processedSinceYield = 0;
 
   // 4. 한글 11,172 음절 생성
   for (let cho = 0; cho < 19; cho++) {
@@ -182,12 +242,21 @@ export function generateFont(jamoLib, fontName = 'MyHandwritingFont', onProgress
         const name = `uni${unicode.toString(16).toUpperCase().padStart(4, '0')}`;
 
         const commands = composeSyllableWithOverride(cho, jung, jong, fullLib, syllableOverrides?.[char] || null);
+        const complexity = getGlyphComplexity(sanitizeCommands(commands));
+        if (shouldSkipComplexGlyph(complexity)) {
+          skippedGlyphs.push({ char, name, unicode, reason: getSkipReason(complexity), ...complexity });
+        }
         const glyph = createGlyph(name, unicode, commands);
         glyphs.push(glyph);
 
         count++;
+        processedSinceYield += 1;
         if (onProgress && count % 200 === 0) {
           onProgress(count / total);
+        }
+        if (processedSinceYield >= GENERATION_YIELD_INTERVAL) {
+          processedSinceYield = 0;
+          await yieldToBrowser();
         }
       }
     }
@@ -202,8 +271,17 @@ export function generateFont(jamoLib, fontName = 'MyHandwritingFont', onProgress
     if (commands.length === 0) continue;
     const char = String.fromCharCode(code);
     const name = `ascii_${char.replace(/[^A-Za-z0-9]/g, `u${code}`).padStart(4, '0')}`;
+    const complexity = getGlyphComplexity(sanitizeCommands(commands));
+    if (shouldSkipComplexGlyph(complexity)) {
+      skippedGlyphs.push({ char, name, unicode: code, reason: getSkipReason(complexity), ...complexity });
+    }
     const glyph = createGlyph(name, code, commands);
     glyphs.push(glyph);
+    processedSinceYield += 1;
+    if (processedSinceYield >= GENERATION_YIELD_INTERVAL) {
+      processedSinceYield = 0;
+      await yieldToBrowser();
+    }
   }
 
   if (onProgress) onProgress(1);
@@ -222,7 +300,13 @@ export function generateFont(jamoLib, fontName = 'MyHandwritingFont', onProgress
 
   const buffer = font.toArrayBuffer();
   opentype.parse(buffer);
-  return buffer;
+  if (skippedGlyphs.length > 0) {
+    console.warn('[font-generator] skipped overly complex glyphs to keep TTF valid', skippedGlyphs.slice(0, 50));
+  }
+  return {
+    buffer,
+    skippedGlyphs,
+  };
 }
 
 /**

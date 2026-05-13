@@ -1,4 +1,4 @@
-/**
+﻿/**
  * main.js — Fontto entry point
  *
  * Application flow:
@@ -86,6 +86,21 @@ class FonttoApp {
       unlockedAt: '',
     };
     this._showLanding();
+    if (saved.__storageInfo?.recovered) {
+      const backupTime = saved.__storageInfo.backupSavedAt
+        ? new Date(saved.__storageInfo.backupSavedAt).toLocaleString()
+        : '';
+      requestAnimationFrame(() => {
+        showToast(
+          backupTime
+            ? `저장 상태에 문제가 있어 백업본으로 복구했습니다. 백업 시각: ${backupTime}`
+            : '저장 상태에 문제가 있어 마지막 백업본으로 복구했습니다.',
+          'warning',
+          4200
+        );
+      });
+      this._persistState();
+    }
     window.addEventListener('resize', () => this._handleResize());
     window.addEventListener('pagehide', () => this._persistState());
     window.addEventListener('beforeunload', () => this._persistState());
@@ -199,8 +214,6 @@ class FonttoApp {
 
         <aside class="editor-browser-area" id="browserContainer"></aside>
 
-        <footer class="editor-footer" id="previewContainer"></footer>
-
         <main class="template-page is-hidden" id="templatePage">
           <section class="template-page-header">
             <div>
@@ -244,18 +257,6 @@ class FonttoApp {
       onInvalidLocateChar: () => showToast('가, 한 같은 한글 음절 한 글자를 입력하세요.', 'warning', 2600),
     });
     this.jamoGrid.setCompletedMap(this._getCompletedMapFromLib());
-
-    // Initialize preview panel
-    const previewContainer = document.getElementById('previewContainer');
-    this.previewPanel = new PreviewPanel(previewContainer, {
-      showBrowser: false,
-      onLocateChar: (char) => this._jumpToGlyphEdit(char),
-      onEditImportedChar: (char) => showSyllableSplitModal(this, char),
-      onOpenGlyph: (char, meta) => this._handleGlyphCardOpen(char, meta),
-      onInvalidLocateChar: () => showToast('한글 음절 범위에 없는 글자입니다.', 'warning', 2600),
-    });
-    this.previewPanel.updateJamoLib(deriveAll(this.jamoLib));
-    this.previewPanel.updateSyllableImports(this.syllableImports);
 
     const browserContainer = document.getElementById('browserContainer');
     this.browserPanel = new PreviewPanel(browserContainer, {
@@ -1282,6 +1283,65 @@ class FonttoApp {
     });
   }
 
+  _getEditTargetMapForSyllable(choIdx, jungIdx, jongIdx) {
+    const targets = this._getEditTargetsForSyllable(choIdx, jungIdx, jongIdx);
+    return {
+      cho: targets.find((target) => target.categoryId.startsWith('cho')) || null,
+      jung: targets.find((target) => target.categoryId.startsWith('jung')) || null,
+      jong: targets.filter((target) => target.categoryId.startsWith('jong')),
+    };
+  }
+
+  _applySyllableOverrideToRelatedCards(char, override) {
+    const info = decomposeChar(char);
+    if (!info || !override) {
+      return { applied: 0, chars: [] };
+    }
+
+    const targetMap = this._getEditTargetMapForSyllable(info.cho, info.jung, info.jong);
+    const overrides = loadSyllableOverrides();
+    const touched = new Set();
+
+    const applyPart = (partKey, targets) => {
+      if (!targets?.length) return;
+
+      const chars = this._getAffectedCharsForTargets(targets, Number.POSITIVE_INFINITY);
+      chars.forEach((affectedChar) => {
+        const existing = overrides[affectedChar] || {
+          cho: { dx: 0, dy: 0, sx: 1, sy: 1 },
+          jung: { dx: 0, dy: 0, sx: 1, sy: 1 },
+          jong: { dx: 0, dy: 0, sx: 1, sy: 1 },
+        };
+
+        overrides[affectedChar] = {
+          cho: { ...(existing.cho || { dx: 0, dy: 0, sx: 1, sy: 1 }) },
+          jung: { ...(existing.jung || { dx: 0, dy: 0, sx: 1, sy: 1 }) },
+          jong: { ...(existing.jong || { dx: 0, dy: 0, sx: 1, sy: 1 }) },
+          [partKey]: { ...(override[partKey] || { dx: 0, dy: 0, sx: 1, sy: 1 }) },
+        };
+        this._restoreDeletedSyllable(affectedChar);
+        touched.add(affectedChar);
+      });
+    };
+
+    applyPart('cho', targetMap.cho ? [targetMap.cho] : []);
+    applyPart('jung', targetMap.jung ? [targetMap.jung] : []);
+    applyPart('jong', targetMap.jong || []);
+
+    if (!touched.size) {
+      return { applied: 0, chars: [] };
+    }
+
+    saveSyllableOverrides(overrides);
+    this._persistState();
+    this._refreshGlyphViews();
+
+    return {
+      applied: touched.size,
+      chars: [...touched],
+    };
+  }
+
   _getChoCategoryIdForContext(vowelCategory, hasFinal) {
     if (vowelCategory === 'vertical') return hasFinal ? 'cho_v_wf' : 'cho_v';
     if (vowelCategory === 'horizontal') return hasFinal ? 'cho_h_wf' : 'cho_h';
@@ -1813,9 +1873,13 @@ class FonttoApp {
 
     const grid = container.querySelector('.template-import-review-grid');
     importedSlots.forEach((slot, index) => {
+      const appliedTargets = slot.targets.filter((target) => this._isTargetStored(target));
+      const isApplied = appliedTargets.length > 0;
+      const isComplete = appliedTargets.length === slot.targets.length && slot.targets.length > 0;
+      const isPartial = isApplied && !isComplete;
       const card = document.createElement('button');
       card.type = 'button';
-      card.className = 'template-import-card';
+      card.className = `template-import-card ${isPartial ? 'is-partial' : ''} ${isComplete ? 'is-complete' : ''}`.trim();
       const image = document.createElement('img');
       image.className = 'template-import-card-image';
       image.alt = `${slot.char} 원본`;
@@ -1827,11 +1891,33 @@ class FonttoApp {
 
       const subtitle = document.createElement('span');
       subtitle.className = 'template-import-card-subtitle';
-      subtitle.textContent = slot.targets.map((target) => target.label).join(' / ');
+      subtitle.textContent = isApplied
+        ? `${appliedTargets.length}/${slot.targets.length}개 대상 반영`
+        : '아직 적용되지 않음';
+
+      const targetList = document.createElement('div');
+      targetList.className = 'template-import-card-targets';
+      slot.targets.forEach((target) => {
+        const chip = document.createElement('span');
+        const applied = this._isTargetStored(target);
+        chip.className = `template-import-card-target ${applied ? 'is-applied' : ''}`.trim();
+        chip.textContent = target.jamo;
+        chip.title = target.label;
+        targetList.appendChild(chip);
+      });
+
+      if (isApplied) {
+        const badge = document.createElement('span');
+        badge.className = `template-import-card-badge ${isComplete ? 'is-complete' : 'is-partial'}`;
+        badge.title = isComplete ? '적용 완료' : '부분 적용';
+        badge.setAttribute('aria-label', isComplete ? '적용 완료' : '부분 적용');
+        card.appendChild(badge);
+      }
 
       card.appendChild(image);
       card.appendChild(title);
       card.appendChild(subtitle);
+      card.appendChild(targetList);
       card.addEventListener('click', () => {
         showSyllableSplitModal(this, slot.char, {
           imageSrc: slot.imageSrc,
@@ -2208,7 +2294,7 @@ class FonttoApp {
       const fill = isSelected
         ? [255, 184, 77, 255]
         : isAssigned
-          ? [0, 212, 170, 255]
+          ? [72, 255, 184, 255]
           : [255, 255, 255, 255];
       component.pixels.forEach((pixelIndex) => {
         const idx = pixelIndex * 4;
@@ -2226,9 +2312,9 @@ class FonttoApp {
       ctx.strokeStyle = isSelected
         ? 'rgba(255, 184, 77, 0.95)'
         : assignedTarget !== undefined
-          ? 'rgba(0, 212, 170, 0.85)'
+          ? 'rgba(72, 255, 184, 0.98)'
           : 'rgba(255,255,255,0.18)';
-      ctx.lineWidth = isSelected || assignedTarget !== undefined ? 2 : 1;
+      ctx.lineWidth = isSelected || assignedTarget !== undefined ? 2.5 : 1;
       ctx.strokeRect(
         component.bounds.minX - 2,
         component.bounds.minY - 2,
@@ -2237,6 +2323,7 @@ class FonttoApp {
       );
     });
 
+    this._drawManualAssignedBadges(ctx, state);
     this._drawManualSelectionBounds(ctx, state);
 
     const selectedCount = state.selectedComponentIds?.size ?? 0;
@@ -2246,7 +2333,7 @@ class FonttoApp {
       : state.editMode === 'draw'
         ? '그리기 모드: 누락된 획 픽셀을 복원하세요.'
         : '선택 모드: 그룹을 클릭한 뒤 현재 대상에 적용하세요.';
-    selectionSummary.textContent = `획 그룹 ${state.extracted.components.length}개를 찾았습니다. ${selectedCount}개 선택됨, 전체 ${totalAssigned}개 지정됨. ${modeText}`;
+    selectionSummary.textContent = `획 그룹 ${state.extracted.components.length}개를 찾았습니다. ${selectedCount}개 선택됨, 전체 ${totalAssigned}개 지정됨. 초록색은 이미 적용된 획입니다. ${modeText}`;
   }
 
   _renderManualTargetList(targetList, state, rerender) {
@@ -2353,6 +2440,42 @@ class FonttoApp {
       ctx.fill();
       ctx.stroke();
     });
+    ctx.restore();
+  }
+
+  _drawManualAssignedBadges(ctx, state) {
+    const assignedComponents = state?.extracted?.components?.filter((component) => state.assignments.has(component.id));
+    if (!assignedComponents?.length) return;
+
+    ctx.save();
+    ctx.font = 'bold 11px "Noto Sans KR", sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+
+    assignedComponents.forEach((component) => {
+      const targetIndex = state.assignments.get(component.id);
+      const target = targetIndex !== undefined ? state.targets?.[targetIndex] : null;
+      if (!target) return;
+
+      const label = target.jamo;
+      const paddingX = 6;
+      const height = 18;
+      const width = Math.max(18, Math.ceil(ctx.measureText(label).width) + paddingX * 2);
+      const x = Math.max(2, component.bounds.minX - 1);
+      const y = Math.max(2, component.bounds.minY - 22);
+
+      ctx.fillStyle = 'rgba(10, 80, 58, 0.96)';
+      ctx.strokeStyle = 'rgba(72, 255, 184, 0.98)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.roundRect(x, y, width, height, 7);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = '#d8fff3';
+      ctx.fillText(label, x + paddingX, y + 4);
+    });
+
     ctx.restore();
   }
 
@@ -2746,12 +2869,16 @@ class FonttoApp {
         };
       }
       const fullLib = deriveAll(this.jamoLib);
-      this.previewPanel.updateJamoLib(fullLib);
+      this.previewPanel?.updateJamoLib(fullLib);
       if (this.browserPanel) this.browserPanel.updateJamoLib(fullLib);
       if (this.templateBrowserPanel) this.templateBrowserPanel.updateJamoLib(fullLib);
-      this.previewPanel.updateSyllableImports(this.syllableImports);
+      this.previewPanel?.updateSyllableImports(this.syllableImports);
       if (this.browserPanel) this.browserPanel.updateSyllableImports(this.syllableImports);
       if (this.templateBrowserPanel) this.templateBrowserPanel.updateSyllableImports(this.syllableImports);
+      this._renderTemplateImportReview(
+        document.getElementById('templatePageImportReview'),
+        this.templateImportedSlots
+      );
       this._persistState();
       this._pushHistorySnapshot(historySnapshot, '글자 카드에 부분 적용');
       this._checkGenerateReady();
@@ -2825,9 +2952,11 @@ class FonttoApp {
     return state.targets.some((_, index) => [...state.assignments.values()].includes(index));
   }
 
-  _getAffectedCharsForTargets(targets) {
+  _getAffectedCharsForTargets(targets, maxChars = 18) {
     const chars = [];
+    const reachedLimit = () => Number.isFinite(maxChars) && chars.length >= maxChars;
     const push = (cho, jung, jong = 0) => {
+      if (reachedLimit()) return;
       const char = compose(cho, jung, jong);
       if (!chars.includes(char)) chars.push(char);
     };
@@ -2841,7 +2970,7 @@ class FonttoApp {
         if (cho < 0) return;
         const needsFinal = target.categoryId.endsWith('_wf');
         const wantsVertical = target.categoryId.includes('_v');
-        for (let jung = 0; jung < JUNG.length && chars.length < 18; jung++) {
+        for (let jung = 0; jung < JUNG.length && !reachedLimit(); jung++) {
           const vowelCategory = getVowelCategory(jung);
           const matchesVowel = wantsVertical
             ? vowelCategory === 'vertical'
@@ -2861,7 +2990,7 @@ class FonttoApp {
         const jung = JUNG.findIndex((item) => item === target.jamo);
         if (jung < 0) return;
         const needsFinal = target.categoryId === 'jung_wb';
-        for (let cho = 0; cho < CHO.length && chars.length < 18; cho++) {
+        for (let cho = 0; cho < CHO.length && !reachedLimit(); cho++) {
           push(cho, jung, needsFinal ? 1 : 0);
         }
         return;
@@ -2871,8 +3000,8 @@ class FonttoApp {
         const jong = JONG.findIndex((item) => item === target.jamo);
         if (jong <= 0) return;
         const wantsHorizontal = target.categoryId.endsWith('_h');
-        for (let cho = 0; cho < CHO.length && chars.length < 18; cho++) {
-          for (let jung = 0; jung < JUNG.length && chars.length < 18; jung++) {
+        for (let cho = 0; cho < CHO.length && !reachedLimit(); cho++) {
+          for (let jung = 0; jung < JUNG.length && !reachedLimit(); jung++) {
             const isHorizontal = getVowelCategory(jung) === 'horizontal';
             if (wantsHorizontal !== isHorizontal) continue;
             push(cho, jung, jong);
@@ -2885,7 +3014,7 @@ class FonttoApp {
   }
 
   _restoreDeletedSyllablesForTargets(targets = []) {
-    const chars = this._getAffectedCharsForTargets(targets);
+      const chars = this._getAffectedCharsForTargets(targets, Number.POSITIVE_INFINITY);
     if (!chars.length) return;
     chars.forEach((char) => this._restoreDeletedSyllable(char));
   }
@@ -2933,10 +3062,10 @@ class FonttoApp {
     this.pendingParts = {};
     this._persistState();
     const fullLib = deriveAll(this.jamoLib);
-    this.previewPanel.updateJamoLib(fullLib);
+    this.previewPanel?.updateJamoLib(fullLib);
     if (this.browserPanel) this.browserPanel.updateJamoLib(fullLib);
     if (this.templateBrowserPanel) this.templateBrowserPanel.updateJamoLib(fullLib);
-    this.previewPanel.updateSyllableImports(this.syllableImports);
+    this.previewPanel?.updateSyllableImports(this.syllableImports);
     if (this.browserPanel) this.browserPanel.updateSyllableImports(this.syllableImports);
     if (this.templateBrowserPanel) this.templateBrowserPanel.updateSyllableImports(this.syllableImports);
     this._persistState();

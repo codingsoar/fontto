@@ -14,7 +14,10 @@ const TEMPLATE_PADDING_Y = 144;
 const TEMPLATE_HEADER_HEIGHT = 96;
 const TEMPLATE_FOOTER_HEIGHT = 68;
 const TEMPLATE_DRAW_PADDING = 30;
-const TEMPLATE_IMPORT_INSET = 22;
+const TEMPLATE_IMPORT_INSET = 0;
+const TEMPLATE_IMPORT_BLEED = 12;
+const TEMPLATE_CLEAN_IMAGE_PADDING = 20;
+const RASTER_EXPORT_MAX_DIMENSION = 320;
 const TEMPLATE_FONT_FAMILY = 'NanumGothic ExtraBold, Nanum Gothic, NanumGothic, sans-serif';
 
 export function getTemplateSlots() {
@@ -131,44 +134,50 @@ export function getTemplateDrawRect(cellRect, metrics) {
 export function getTemplateImportRect(cellRect, metrics) {
   const drawRect = getTemplateDrawRect(cellRect, metrics);
   const inset = Math.min(TEMPLATE_IMPORT_INSET, Math.floor(Math.min(drawRect.w, drawRect.h) * 0.08));
+  const bleed = Math.min(TEMPLATE_IMPORT_BLEED, metrics.drawPadding);
+  const minX = cellRect.x + 4;
+  const minY = cellRect.y + metrics.headerHeight;
+  const maxX = cellRect.x + cellRect.w - 4;
+  const maxY = cellRect.y + cellRect.h - metrics.footerHeight;
+  const x = Math.max(minX, drawRect.x + inset - bleed);
+  const y = Math.max(minY, drawRect.y + inset - bleed);
+  const right = Math.min(maxX, drawRect.x + drawRect.w - inset + bleed);
+  const bottom = Math.min(maxY, drawRect.y + drawRect.h - inset + bleed);
+
   return {
-    x: drawRect.x + inset,
-    y: drawRect.y + inset,
-    w: Math.max(drawRect.w - inset * 2, 8),
-    h: Math.max(drawRect.h - inset * 2, 8),
+    x,
+    y,
+    w: Math.max(right - x, 8),
+    h: Math.max(bottom - y, 8),
   };
 }
 
 export function rasterRectToCommands(imageData, targetRegion = null) {
-  const { mask, bounds } = buildMaskFromImageData(imageData);
+  const normalizedImageData = normalizeRasterExportImageData(imageData);
+  const { mask, bounds } = buildMaskFromImageData(normalizedImageData);
   if (!bounds) return [];
 
-  const components = getConnectedComponents(mask, imageData.width, imageData.height, bounds)
-    .filter((component) => component.area >= 18)
-    .filter((component) => component.w >= 2 && component.h >= 2);
+  const components = getFilteredRasterComponents(mask, normalizedImageData.width, normalizedImageData.height, bounds);
   if (components.length === 0) return [];
 
-  const maxArea = Math.max(...components.map((component) => component.area));
-  const kept = components.filter((component) => component.area >= Math.max(18, maxArea * 0.08));
+  const kept = selectPrimaryComponentCluster(components, normalizedImageData.width, normalizedImageData.height);
   if (kept.length === 0) return [];
 
-  const filteredMask = buildMaskFromComponents(kept, imageData.width, imageData.height);
-  return maskToCommands(filteredMask, imageData.width, imageData.height, mergeComponentBounds(kept), targetRegion);
+  const filteredMask = buildMaskFromComponents(kept, normalizedImageData.width, normalizedImageData.height);
+  return maskToCommands(filteredMask, normalizedImageData.width, normalizedImageData.height, mergeComponentBounds(kept), targetRegion);
 }
 
 export function rasterRectToStrokes(imageData, targetRegion = null) {
-  const { mask, bounds } = buildMaskFromImageData(imageData);
+  const normalizedImageData = normalizeRasterExportImageData(imageData);
+  const { mask, bounds } = buildMaskFromImageData(normalizedImageData);
   if (!bounds) return [];
 
-  const components = getConnectedComponents(mask, imageData.width, imageData.height, bounds)
-    .filter((component) => component.area >= 18)
-    .filter((component) => component.w >= 2 && component.h >= 2);
+  const components = getFilteredRasterComponents(mask, normalizedImageData.width, normalizedImageData.height, bounds);
   if (components.length === 0) return [];
 
-  const maxArea = Math.max(...components.map((component) => component.area));
-  const kept = components.filter((component) => component.area >= Math.max(18, maxArea * 0.08));
-  const filteredMask = buildMaskFromComponents(kept, imageData.width, imageData.height);
-  return maskToStrokes(filteredMask, imageData.width, imageData.height, mergeComponentBounds(kept), targetRegion);
+  const kept = selectPrimaryComponentCluster(components, normalizedImageData.width, normalizedImageData.height);
+  const filteredMask = buildMaskFromComponents(kept, normalizedImageData.width, normalizedImageData.height);
+  return maskToStrokes(filteredMask, normalizedImageData.width, normalizedImageData.height, mergeComponentBounds(kept), targetRegion);
 }
 
 export function rasterRectToCleanImageData(imageData) {
@@ -176,17 +185,14 @@ export function rasterRectToCleanImageData(imageData) {
   const empty = new ImageData(1, 1);
   if (!bounds) return empty;
 
-  const components = getConnectedComponents(mask, imageData.width, imageData.height, bounds)
-    .filter((component) => component.area >= 18)
-    .filter((component) => component.w >= 2 && component.h >= 2);
+  const components = getFilteredRasterComponents(mask, imageData.width, imageData.height, bounds);
   if (components.length === 0) return empty;
 
-  const maxArea = Math.max(...components.map((component) => component.area));
-  const kept = components.filter((component) => component.area >= Math.max(18, maxArea * 0.08));
+  const kept = selectPrimaryComponentCluster(components, imageData.width, imageData.height);
   if (kept.length === 0) return empty;
 
   const keptBounds = mergeComponentBounds(kept);
-  const padding = 12;
+  const padding = TEMPLATE_CLEAN_IMAGE_PADDING;
   const width = Math.max(keptBounds.maxX - keptBounds.minX + 1 + padding * 2, 8);
   const height = Math.max(keptBounds.maxY - keptBounds.minY + 1 + padding * 2, 8);
   const output = new ImageData(width, height);
@@ -303,6 +309,75 @@ function buildMaskFromImageData(imageData) {
     mask,
     bounds: getMaskBounds(mask, width, height),
   };
+}
+
+function normalizeRasterExportImageData(imageData) {
+  const maxDimension = Math.max(imageData.width, imageData.height);
+  if (maxDimension <= RASTER_EXPORT_MAX_DIMENSION) {
+    return imageData;
+  }
+
+  const scale = RASTER_EXPORT_MAX_DIMENSION / maxDimension;
+  const width = Math.max(1, Math.round(imageData.width * scale));
+  const height = Math.max(1, Math.round(imageData.height * scale));
+  const output = new ImageData(width, height);
+  const src = imageData.data;
+  const dst = output.data;
+
+  for (let y = 0; y < height; y++) {
+    const srcTop = Math.floor(y / scale);
+    const srcBottom = Math.min(imageData.height, Math.ceil((y + 1) / scale));
+    for (let x = 0; x < width; x++) {
+      const srcLeft = Math.floor(x / scale);
+      const srcRight = Math.min(imageData.width, Math.ceil((x + 1) / scale));
+      const dstIndex = (y * width + x) * 4;
+      let pixelCount = 0;
+      let alphaSum = 0;
+      let redSum = 0;
+      let greenSum = 0;
+      let blueSum = 0;
+      let visibleCount = 0;
+      let darkCount = 0;
+
+      for (let srcY = srcTop; srcY < srcBottom; srcY++) {
+        for (let srcX = srcLeft; srcX < srcRight; srcX++) {
+          const srcIndex = (srcY * imageData.width + srcX) * 4;
+          const alpha = src[srcIndex + 3];
+          const red = src[srcIndex];
+          const green = src[srcIndex + 1];
+          const blue = src[srcIndex + 2];
+          const luminance = (red * 0.299) + (green * 0.587) + (blue * 0.114);
+
+          pixelCount += 1;
+          alphaSum += alpha;
+          redSum += red;
+          greenSum += green;
+          blueSum += blue;
+          if (alpha > 0) visibleCount += 1;
+          if (alpha > 0 && luminance < 185) darkCount += 1;
+        }
+      }
+
+      if (pixelCount === 0) continue;
+
+      const averageAlpha = alphaSum / pixelCount;
+      const darkCoverage = visibleCount > 0 ? darkCount / visibleCount : 0;
+      if (darkCount > 0 && darkCoverage >= 0.08) {
+        dst[dstIndex] = 0;
+        dst[dstIndex + 1] = 0;
+        dst[dstIndex + 2] = 0;
+        dst[dstIndex + 3] = Math.max(averageAlpha, 220);
+        continue;
+      }
+
+      dst[dstIndex] = Math.round(redSum / pixelCount);
+      dst[dstIndex + 1] = Math.round(greenSum / pixelCount);
+      dst[dstIndex + 2] = Math.round(blueSum / pixelCount);
+      dst[dstIndex + 3] = Math.round(averageAlpha);
+    }
+  }
+
+  return output;
 }
 
 function fitToDefaultBox(sourceWidth, sourceHeight) {
@@ -508,6 +583,63 @@ function getConnectedComponents(mask, width, height, bounds) {
   }
 
   return components;
+}
+
+function getFilteredRasterComponents(mask, width, height, bounds) {
+  const components = getConnectedComponents(mask, width, height, bounds)
+    .filter((component) => component.area >= 18)
+    .filter((component) => component.w >= 2 && component.h >= 2);
+  if (components.length === 0) return [];
+
+  const maxArea = Math.max(...components.map((component) => component.area));
+  return components.filter((component) => component.area >= Math.max(18, maxArea * 0.08));
+}
+
+function selectPrimaryComponentCluster(components, width, height) {
+  if (components.length <= 1) return components;
+
+  const sorted = [...components].sort((a, b) => b.area - a.area);
+  const selected = [sorted[0]];
+  const remaining = sorted.slice(1);
+  const gapXLimit = Math.max(18, Math.round(width * 0.08));
+  const gapYLimit = Math.max(18, Math.round(height * 0.12));
+  let bounds = mergeComponentBounds(selected);
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+
+    for (let index = remaining.length - 1; index >= 0; index -= 1) {
+      const component = remaining[index];
+      const gapX = getAxisGap(
+        getComponentBound(component, 'minX'),
+        getComponentBound(component, 'maxX'),
+        bounds.minX,
+        bounds.maxX,
+      );
+      const gapY = getAxisGap(
+        getComponentBound(component, 'minY'),
+        getComponentBound(component, 'maxY'),
+        bounds.minY,
+        bounds.maxY,
+      );
+
+      if (gapX > gapXLimit || gapY > gapYLimit) continue;
+
+      selected.push(component);
+      remaining.splice(index, 1);
+      bounds = mergeComponentBounds(selected);
+      changed = true;
+    }
+  }
+
+  return selected;
+}
+
+function getAxisGap(minA, maxA, minB, maxB) {
+  if (maxA < minB) return minB - maxA;
+  if (maxB < minA) return minA - maxB;
+  return 0;
 }
 
 function buildMaskFromComponents(components, width, height) {
