@@ -200,16 +200,22 @@ class FonttoApp {
 
         <main class="editor-canvas-area">
           <section class="pending-parts-panel" id="pendingPartsPanel"></section>
-          <details class="manual-drawing-details">
-            <summary class="template-legacy-summary">고급 직접 그리기</summary>
+          <section class="manual-drawing-details">
             <div class="manual-drawing-body">
+              <div class="manual-drawing-intro">
+                <div>
+                  <h2>고급 직접 그리기</h2>
+                  <p>템플릿에서 가져온 원본 글자만으로 부족할 때, 여기서 직접 획을 그리거나 다듬어 자모를 보완할 수 있습니다.</p>
+                </div>
+                <span class="manual-drawing-badge">보완 입력</span>
+              </div>
               <div class="canvas-wrapper">
                 <canvas id="drawingCanvas"></canvas>
               </div>
               <div class="toolbar-area" id="toolbarContainer"></div>
               <div class="quality-panel" id="qualityPanel"></div>
             </div>
-          </details>
+          </section>
         </main>
 
         <aside class="editor-browser-area" id="browserContainer"></aside>
@@ -655,9 +661,13 @@ class FonttoApp {
     };
 
     importedSlots.forEach((slot, index) => {
+      const appliedTargets = slot.targets.filter((target) => this._isTargetStored(target));
+      const isApplied = appliedTargets.length > 0;
+      const isComplete = appliedTargets.length === slot.targets.length && slot.targets.length > 0;
+      const isPartial = isApplied && !isComplete;
       const card = document.createElement('button');
       card.type = 'button';
-      card.className = 'pending-imported-card';
+      card.className = `pending-imported-card ${isPartial ? 'is-partial' : ''} ${isComplete ? 'is-complete' : ''}`.trim();
 
       const image = document.createElement('img');
       image.className = 'pending-imported-card-image';
@@ -670,7 +680,17 @@ class FonttoApp {
 
       const subtitle = document.createElement('span');
       subtitle.className = 'pending-imported-card-subtitle';
-      subtitle.textContent = slot.targets.map((target) => target.label).join(' / ');
+      subtitle.textContent = isApplied
+        ? `${appliedTargets.length}/${slot.targets.length}개 대상 반영`
+        : slot.targets.map((target) => target.label).join(' / ');
+
+      if (isApplied) {
+        const badge = document.createElement('span');
+        badge.className = `pending-imported-card-badge ${isComplete ? 'is-complete' : 'is-partial'}`;
+        badge.title = isComplete ? '적용 완료' : '부분 적용';
+        badge.setAttribute('aria-label', isComplete ? '적용 완료' : '부분 적용');
+        card.appendChild(badge);
+      }
 
       card.appendChild(image);
       card.appendChild(title);
@@ -3242,6 +3262,14 @@ class FonttoApp {
     this.templateBrowserPanel?.updateSyllableImports(this.syllableImports);
   }
 
+  _refreshTemplateImportedViews() {
+    this._renderTemplateImportReview(
+      document.getElementById('templatePageImportReview'),
+      this.templateImportedSlots
+    );
+    this._renderPendingPartsPanel();
+  }
+
   _restoreDeletedSyllable(char) {
     if (!char) return;
     const deleted = new Set(loadDeletedSyllables());
@@ -3303,6 +3331,7 @@ class FonttoApp {
     this._checkGenerateReady();
     this._persistState();
     this._refreshGlyphViews();
+    this._refreshTemplateImportedViews();
     showToast(`${char} 글자 카드 데이터를 삭제했습니다.`, 'success', 2200);
     return true;
   }

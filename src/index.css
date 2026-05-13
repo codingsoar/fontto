@@ -534,6 +534,7 @@ body {
 }
 
 .pending-imported-card {
+  position: relative;
   display: grid;
   grid-template-rows: 84px auto minmax(0, 1fr);
   justify-items: center;
@@ -556,6 +557,18 @@ body {
   border-color: rgba(124, 92, 252, 0.35);
 }
 
+.pending-imported-card.is-partial {
+  border-color: rgba(255, 184, 77, 0.45);
+  background: rgba(255, 184, 77, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(255, 184, 77, 0.14);
+}
+
+.pending-imported-card.is-complete {
+  border-color: rgba(72, 255, 184, 0.45);
+  background: rgba(72, 255, 184, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(72, 255, 184, 0.2), 0 0 0 1px rgba(72, 255, 184, 0.12);
+}
+
 .pending-imported-card-image {
   width: 72px;
   height: 72px;
@@ -563,6 +576,16 @@ body {
   padding: 6px;
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.24);
+}
+
+.pending-imported-card.is-partial .pending-imported-card-image {
+  background: rgba(255, 184, 77, 0.14);
+  outline: 1px solid rgba(255, 184, 77, 0.35);
+}
+
+.pending-imported-card.is-complete .pending-imported-card-image {
+  background: rgba(0, 212, 170, 0.14);
+  outline: 1px solid rgba(0, 212, 170, 0.35);
 }
 
 .pending-imported-card-title {
@@ -581,6 +604,27 @@ body {
   -webkit-line-clamp: 4;
   -webkit-box-orient: vertical;
   word-break: keep-all;
+}
+
+.pending-imported-card-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  box-shadow: 0 0 0 2px rgba(15, 16, 24, 0.9);
+}
+
+.pending-imported-card-badge.is-partial {
+  background: rgba(255, 184, 77, 0.95);
+  border-color: rgba(255, 184, 77, 0.75);
+}
+
+.pending-imported-card-badge.is-complete {
+  background: rgba(72, 255, 184, 0.95);
+  border-color: rgba(72, 255, 184, 0.75);
 }
 
 .pending-parts-header {
@@ -667,8 +711,7 @@ body {
   flex: 0 0 auto;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
-  background: rgba(255, 255, 255, 0.02);
-  overflow: hidden;
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .manual-drawing-body {
@@ -677,7 +720,35 @@ body {
   gap: 16px;
   min-height: 0;
   padding: 16px;
-  border-top: 1px solid var(--border-subtle);
+}
+
+.manual-drawing-intro {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.manual-drawing-intro h2 {
+  margin: 0 0 6px;
+  font-size: 18px;
+}
+
+.manual-drawing-intro p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.manual-drawing-badge {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(124, 92, 252, 0.14);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .editor-browser-area {
