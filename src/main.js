@@ -1906,9 +1906,12 @@ class FonttoApp {
   _paintManualMaskAtEvent(event, canvas, state) {
     if (!state.editImageData) return;
 
-    const rect = canvas.getBoundingClientRect();
-    const x = Math.floor((event.clientX - rect.left) * (canvas.width / rect.width));
-    const y = Math.floor((event.clientY - rect.top) * (canvas.height / rect.height));
+    const { x, y } = this._getManualCanvasPoint(event, canvas);
+    this._paintManualMaskAtPoint(state, Math.floor(x), Math.floor(y));
+  }
+
+  _paintManualMaskAtPoint(state, x, y) {
+    if (!state.editImageData) return;
     const radius = Math.max(Math.floor((state.brushSize || 18) / 2), 1);
     const { width, height, data } = state.editImageData;
     const minX = Math.max(x - radius, 0);
@@ -1936,6 +1939,26 @@ class FonttoApp {
         }
       }
     }
+  }
+
+  _cutManualMaskLine(state, fromPoint, toPoint) {
+    if (!state?.editImageData || !fromPoint || !toPoint) return;
+
+    const dx = toPoint.x - fromPoint.x;
+    const dy = toPoint.y - fromPoint.y;
+    const distance = Math.max(Math.hypot(dx, dy), 1);
+    const steps = Math.max(1, Math.ceil(distance / 2));
+    const previousMode = state.editMode;
+    state.editMode = 'erase';
+
+    for (let step = 0; step <= steps; step++) {
+      const t = step / steps;
+      const x = Math.round(fromPoint.x + dx * t);
+      const y = Math.round(fromPoint.y + dy * t);
+      this._paintManualMaskAtPoint(state, x, y);
+    }
+
+    state.editMode = previousMode;
   }
 
   _reextractManualMask(state) {
@@ -2177,10 +2200,26 @@ class FonttoApp {
     const totalAssigned = state.assignments.size;
     const modeText = state.editMode === 'erase'
       ? '지우기 모드: 연결된 획 위를 드래그해 분리하세요.'
+      : state.editMode === 'cut'
+        ? '자르기 모드: 이어진 부분을 가로질러 드래그하면 직선으로 끊습니다.'
       : state.editMode === 'draw'
         ? '그리기 모드: 누락된 획 픽셀을 복원하세요.'
         : '선택 모드: 그룹을 클릭한 뒤 현재 대상에 적용하세요.';
     selectionSummary.textContent = `획 그룹 ${state.extracted.components.length}개를 찾았습니다. ${selectedCount}개 선택됨, 전체 ${totalAssigned}개 지정됨. 초록색은 이미 적용된 획입니다. ${modeText}`;
+
+    if (state.cutPreview?.start && state.cutPreview?.end) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255, 96, 96, 0.95)';
+      ctx.lineWidth = Math.max((state.brushSize || 18) * 0.45, 3);
+      ctx.lineCap = 'round';
+      ctx.setLineDash([10, 8]);
+      ctx.beginPath();
+      ctx.moveTo(state.cutPreview.start.x, state.cutPreview.start.y);
+      ctx.lineTo(state.cutPreview.end.x, state.cutPreview.end.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
   }
 
   _renderManualTargetList(targetList, state, rerender) {

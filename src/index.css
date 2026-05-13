@@ -1959,6 +1959,21 @@ body {
   gap: 6px;
 }
 
+.template-manual-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.template-manual-history {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .template-manual-header h3 {
   font-size: 16px;
 }
