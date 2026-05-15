@@ -761,7 +761,7 @@ class FonttoApp {
     if (!selection) {
       container.innerHTML = `
         <div class="active-jamo-editor-empty">
-          왼쪽 자모 카드를 선택하면 여기서 획을 그리거나 위치를 직접 조정할 수 있습니다.
+          왼쪽 자모 카드를 선택하면 여기서 선택된 자모의 위치와 크기를 직접 조정할 수 있습니다.
         </div>
       `;
       return;
@@ -783,7 +783,7 @@ class FonttoApp {
             </div>
             <div class="active-jamo-editor-meta">
               <span class="active-jamo-editor-chip">원본 ${savedDraft.sourceChar || selection.sourceChar}</span>
-              <span class="active-jamo-editor-chip">${selection.guide?.label || '가이드 편집'}</span>
+              <span class="active-jamo-editor-chip">${selection.guide?.label || '원본 위치 조정'}</span>
             </div>
           </div>
           <div class="active-jamo-editor-layout">
@@ -811,8 +811,6 @@ class FonttoApp {
     }
 
     const strokeCount = Array.isArray(savedDraft?.strokes) ? savedDraft.strokes.length : 0;
-    const guideRegion = selection.guide?.targetRegion ? { ...selection.guide.targetRegion } : null;
-    this.activeGuideRegion = guideRegion ? { ...guideRegion } : null;
 
     container.innerHTML = `
       <div class="active-jamo-editor-card">
@@ -820,72 +818,26 @@ class FonttoApp {
           <div>
             <div class="active-jamo-editor-eyebrow">${selection.categoryId}</div>
             <h2>${selection.jamo} 편집</h2>
-            <p>예시 글자 <strong>${selection.example}</strong>를 기준으로 획을 그리고, <strong>가이드 글자 조정</strong>에서 가이드 위치를 맞출 수 있습니다.</p>
+            <p>이 자모는 아직 가져온 글자 편집 캔버스와 연결되지 않았습니다. 현재 추출된 글자 정보만 확인할 수 있습니다.</p>
           </div>
           <div class="active-jamo-editor-meta">
-            <span class="active-jamo-editor-chip">가이드 ${selection.example}</span>
+            <span class="active-jamo-editor-chip">추출 글자 ${selection.example}</span>
             ${selection.sourceChar ? `<span class="active-jamo-editor-chip">원본 ${selection.sourceChar}</span>` : ''}
             <span class="active-jamo-editor-chip">${strokeCount}개 획</span>
-            <span class="active-jamo-editor-chip">${selection.guide?.label || '가이드 편집'}</span>
+            <span class="active-jamo-editor-chip">${selection.jamo}</span>
           </div>
-        </div>
-        <div class="active-jamo-editor-modebar">
-          <button class="tool-btn" type="button" data-editor-mode="guide-focus">가이드 글자 조정</button>
-        </div>
-        <div class="active-jamo-editor-layout">
-          <div class="active-jamo-editor-canvas-shell">
-            <canvas class="active-jamo-editor-canvas" id="activeJamoCanvas"></canvas>
-          </div>
-          <div class="active-jamo-editor-toolbar" id="activeJamoToolbar"></div>
         </div>
         <div class="active-jamo-editor-footer">
           <div class="active-jamo-editor-hint">
-            가이드 글자 외곽을 직접 끌어 위치와 크기를 맞출 수 있습니다. 저장하면 보이는 변형이 기존 획 위치와 크기에 그대로 반영됩니다.
-          </div>
-          <div class="active-jamo-editor-actions">
-            <button class="gen-btn" type="button" id="activeJamoSaveBtn">저장</button>
-            <button class="gen-btn download-btn" type="button" id="activeJamoSaveNextBtn">저장 후 다음</button>
+            추출 대상: <strong>${selection.example}</strong> 안의 <strong>${selection.jamo}</strong>
           </div>
         </div>
       </div>
     `;
 
-    const canvasEl = document.getElementById('activeJamoCanvas');
-    const toolbarEl = document.getElementById('activeJamoToolbar');
-    if (!canvasEl || !toolbarEl) return;
-
-    const drawingCanvas = new DrawingCanvas(canvasEl, {
-      penSize: 8,
-    });
-    drawingCanvas.setGuide(selection.guide || {});
-    drawingCanvas.loadStrokes(savedDraft?.strokes || []);
-
-    const toolbar = new Toolbar(toolbarEl, {
-      onSave: () => this._saveActiveJamoEditor(false),
-      onNext: () => this._saveActiveJamoEditor(true),
-    });
-
-    this.activeDrawingCanvas = drawingCanvas;
-    this.activeToolbar = toolbar;
-    drawingCanvas.setGuideImageAlignment(savedDraft?.guideImageAlignment || null);
-    drawingCanvas.setGuideReferenceMode(savedDraft?.guideEditorImageSrc || selection.guideEditorImageSrc ? 'editor-canvas' : 'default');
-    drawingCanvas.setGuideFocusTransform(savedDraft?.guideFocusTransform || null);
-    drawingCanvas.setGuideFocusImage(null);
-    this._loadActiveGuideReferenceImage(selection, drawingCanvas);
-
-    container.querySelectorAll('[data-editor-mode]').forEach((button) => {
-      button.addEventListener('click', () => {
-        const mode = button.getAttribute('data-editor-mode');
-        this._setActiveEditorMode(mode);
-      });
-    });
-    document.getElementById('activeJamoSaveBtn')?.addEventListener('click', () => {
-      this._saveActiveJamoEditor(false);
-    });
-    document.getElementById('activeJamoSaveNextBtn')?.addEventListener('click', () => {
-      this._saveActiveJamoEditor(true);
-    });
-    this._setActiveEditorMode('guide-focus');
+    this.activeGuideRegion = null;
+    this.activeDrawingCanvas = null;
+    this.activeToolbar = null;
   }
 
   async _mountEmbeddedSourceCanvasEditor(selection, sourceState) {
@@ -1206,7 +1158,7 @@ class FonttoApp {
 
     showToast(
       commands.length > 0
-        ? `${selection.jamo} 입력과 가이드 위치를 저장했습니다.`
+        ? `${selection.jamo} 위치 조정을 저장했습니다.`
         : `${selection.jamo} 입력을 비웠습니다.`,
       'success',
       2200
