@@ -8,6 +8,8 @@
 import './index.css';
 import { JamoGrid, CATEGORIES, REQUIRED_JAMO_COUNT, buildGuideMeta } from './ui/jamo-grid.js';
 import { PreviewPanel } from './ui/preview-panel.js';
+import { DrawingCanvas } from './ui/drawing-canvas.js';
+import { Toolbar } from './ui/toolbar.js';
 import { deriveAll } from './core/jamo-derive.js';
 import {
   buildTemplateSvg,
@@ -23,31 +25,43 @@ import {
   selectedComponentsToPositionedCommands,
   selectedComponentsToStrokes,
 } from './core/template-import.js';
-import { renderPdfFileToCanvases } from './core/pdf-renderer.js';
-import { buildTemplatePdfBytes } from './core/template-pdf.js';
 import { CHO, JUNG, JONG, compose, getVowelCategory, getJongInfo } from './core/hangul.js';
-import { loadState, saveState, clearState } from './core/storage.js';
+import { loadState, saveState, clearState, createStateBackupPayload, importStateBackup } from './core/storage.js';
 import { decomposeChar, composeSyllableFromLib, composeCharFromLib, drawGlyphOnCtx, drawPathCommands, createGlyphCanvas, createPartPreviewCanvas, loadSyllableOverrides, saveSyllableOverrides, loadDeletedSyllables, saveDeletedSyllables } from './core/glyph-utils.js';
+import { createEmptyCompositionStyleProfile, getBaseCompositionLayout, getCompositionContextKey, normalizeCompositionStyleProfile, setCompositionStyleProfile } from './core/composer.js';
 import { showToast } from './ui/toast.js';
-import { showPreviewModal } from './ui/modals/preview-modal.js';
-import { showGenerateModal } from './ui/modals/generate-modal.js';
-import { showReviewModal, getDefaultReviewState } from './ui/modals/review-modal.js';
-import { showSyllableSplitModal } from './ui/modals/syllable-split-modal.js';
-import { showSyllableEditorModal } from './ui/modals/syllable-editor-modal.js';
 
 const RECENT_REVIEW_LIMIT = 8;
 const HISTORY_LIMIT = 40;
+
+function getDefaultReviewState() {
+  return {
+    mode: 'all',
+    page: 0,
+    pageSize: 96,
+    selectedChar: '가',
+    comboQuery: '',
+  };
+}
 
 class FonttoApp {
   jamoDrafts = {};
   guideOverrides = {};
   syllableImports = {};
   templateImportedSlots = [];
+  compositionStyleProfile = createEmptyCompositionStyleProfile();
   downloadAccess = {
     unlocked: false,
     fontName: '',
     unlockedAt: '',
   };
+  uiFeedback = {
+    pendingKeys: [],
+    importedChars: [],
+    browserChars: [],
+    message: '',
+  };
+  uiFeedbackTimer = null;
 
   constructor() {
     this.jamoLib = {};
@@ -62,6 +76,10 @@ class FonttoApp {
     this.editorMode = 'draw';
     this.undoStack = [];
     this.redoStack = [];
+    this.activeEditorSelection = null;
+    this.activeDrawingCanvas = null;
+    this.activeToolbar = null;
+    this.activeGuideRegion = null;
 
     this._init();
   }
@@ -73,6 +91,8 @@ class FonttoApp {
     this.guideOverrides = saved.guideOverrides;
     this.syllableImports = saved.syllableImports;
     this.templateImportedSlots = saved.templateImportedSlots || [];
+    this.compositionStyleProfile = normalizeCompositionStyleProfile(saved.compositionStyleProfile);
+    setCompositionStyleProfile(this.compositionStyleProfile);
     this.pendingParts = saved.pendingParts || {};
     this.downloadAccess = saved.downloadAccess || {
       unlocked: false,
@@ -136,9 +156,9 @@ class FonttoApp {
               <p>초성, 중성, 종성의 구조에 맞춰 조합해서 완성형 글자를 만들어줍니다.</p>
             </div>
             <div class="feature-card">
-              <span class="feature-icon">TTF</span>
-              <h3>TTF 다운로드</h3>
-              <p>생성된 폰트 결과를 검토하고 TTF 파일로 내보내세요.</p>
+              <span class="feature-icon">OTF</span>
+              <h3>OTF 다운로드</h3>
+              <p>생성된 폰트 결과를 검토하고 OpenType 파일로 내보내세요.</p>
             </div>
           </div>
           <div class="landing-start-actions">
@@ -178,6 +198,9 @@ class FonttoApp {
             </div>
           </div>
           <div class="header-right">
+            <button class="header-btn" id="exportBackupBtn">백업 저장</button>
+            <button class="header-btn" id="importBackupBtn">불러오기</button>
+            <input type="file" id="importBackupFileInput" accept="application/json,.json" class="template-file-input is-hidden" />
             <button class="header-btn" id="undoActionBtn" disabled>이전 작업</button>
             <button class="header-btn" id="redoActionBtn" disabled>다시 실행</button>
             <button class="header-btn is-hidden" id="returnToReviewBtn">전체 검토로 돌아가기</button>
@@ -190,6 +213,7 @@ class FonttoApp {
         <aside class="editor-sidebar" id="jamoGridContainer"></aside>
 
         <main class="editor-canvas-area">
+          <section class="active-jamo-editor-panel" id="activeJamoEditorPanel"></section>
           <section class="pending-parts-panel" id="pendingPartsPanel"></section>
         </main>
 
@@ -205,6 +229,9 @@ class FonttoApp {
               <button class="gen-btn" id="templatePageDownloadBtn">A4 PDF 템플릿 다운로드</button>
               <button class="gen-btn" id="templatePageDownloadPngBtn">A4 PNG 템플릿 다운로드</button>
               <label class="gen-btn template-upload-btn" for="templatePageFileInput">작성한 템플릿 업로드</label>
+              <button class="gen-btn" id="templateLearnSpacingBtn">AI 간격 학습</button>
+              <button class="gen-btn" id="templateApplySpacingToCardsBtn">전체 글자 카드에 적용</button>
+              <button class="tool-btn" id="templateResetSpacingBtn">간격 초기화</button>
               <input type="file" id="templatePageFileInput" accept="image/*,.pdf,application/pdf" multiple class="template-file-input" />
             </div>
           </section>
@@ -237,7 +264,7 @@ class FonttoApp {
       showPreviewCanvas: false,
       showBrowser: true,
       onLocateChar: (char) => this._jumpToGlyphEdit(char),
-      onEditImportedChar: (char) => showSyllableSplitModal(this, char),
+      onEditImportedChar: (char) => this._showSyllableSplitModal(char),
       onOpenGlyph: (char, meta) => this._handleGlyphCardOpen(char, meta),
       onInvalidLocateChar: () => showToast('한글 음절 범위에 없는 글자입니다.', 'warning', 2600),
     });
@@ -250,7 +277,7 @@ class FonttoApp {
       showPreviewCanvas: false,
       showBrowser: true,
       onLocateChar: (char) => this._jumpToGlyphEdit(char),
-      onEditImportedChar: (char) => showSyllableSplitModal(this, char),
+      onEditImportedChar: (char) => this._showSyllableSplitModal(char),
       onOpenGlyph: (char, meta) => this._handleGlyphCardOpen(char, meta),
       onInvalidLocateChar: () => showToast('한글 음절 범위에 없는 글자입니다.', 'warning', 2600),
     });
@@ -273,8 +300,17 @@ class FonttoApp {
     document.getElementById('redoActionBtn').addEventListener('click', () => {
       this._redoAppAction();
     });
+    document.getElementById('exportBackupBtn').addEventListener('click', () => {
+      this._exportBackupFile();
+    });
+    document.getElementById('importBackupBtn').addEventListener('click', () => {
+      document.getElementById('importBackupFileInput')?.click();
+    });
+    document.getElementById('importBackupFileInput').addEventListener('change', async (event) => {
+      await this._handleImportBackupFile(event);
+    });
     document.getElementById('previewBtn').addEventListener('click', () => {
-      showPreviewModal(this);
+      this._showPreviewModal();
     });
     const headerRight = document.querySelector('.header-right');
     const generateBtn = document.getElementById('generateBtn');
@@ -287,13 +323,13 @@ class FonttoApp {
       headerRight.insertBefore(resetBtn, generateBtn);
     }
     document.getElementById('reviewBtn').addEventListener('click', () => {
-      showReviewModal(this);
+      this._showReviewModal();
     });
     document.getElementById('returnToReviewBtn').addEventListener('click', () => {
       this._returnToReview();
     });
     document.getElementById('generateBtn').addEventListener('click', () => {
-      showGenerateModal(this);
+      this._showGenerateModal();
     });
 
     // 泥?踰덉㎏ ?먮え ?먮룞 ?좏깮
@@ -354,6 +390,15 @@ class FonttoApp {
     document.getElementById('templatePageDownloadPngBtn')?.addEventListener('click', async () => {
       await this._downloadTemplatePng(slots);
     });
+    document.getElementById('templateLearnSpacingBtn')?.addEventListener('click', async () => {
+      await this._learnSpacingFromTemplate();
+    });
+    document.getElementById('templateApplySpacingToCardsBtn')?.addEventListener('click', () => {
+      this._applyLearnedSpacingToGlyphCards();
+    });
+    document.getElementById('templateResetSpacingBtn')?.addEventListener('click', () => {
+      this._resetLearnedSpacingProfile();
+    });
 
     document.getElementById('templatePageFileInput')?.addEventListener('change', async (event) => {
       const files = [...(event.target.files ?? [])];
@@ -379,6 +424,7 @@ class FonttoApp {
       guideOverrides: this.guideOverrides,
       syllableImports: this.syllableImports,
       templateImportedSlots: this.templateImportedSlots,
+      compositionStyleProfile: this.compositionStyleProfile,
       pendingParts: this.pendingParts,
       recentEditedKeys: this.recentEditedKeys,
     }));
@@ -412,6 +458,8 @@ class FonttoApp {
     this.guideOverrides = snapshot.guideOverrides || {};
     this.syllableImports = snapshot.syllableImports || {};
     this.templateImportedSlots = snapshot.templateImportedSlots || [];
+    this.compositionStyleProfile = normalizeCompositionStyleProfile(snapshot.compositionStyleProfile);
+    setCompositionStyleProfile(this.compositionStyleProfile);
     this.pendingParts = snapshot.pendingParts || {};
     this.recentEditedKeys = snapshot.recentEditedKeys || [];
 
@@ -452,6 +500,17 @@ class FonttoApp {
   _refreshEditorState() {
     const fullLib = deriveAll(this.jamoLib);
     this.jamoGrid?.setCompletedMap(this._getCompletedMapFromLib());
+    if (this.activeEditorSelection) {
+      this.activeEditorSelection = this._applyGuideOverrideToSelection({
+        ...this.activeEditorSelection,
+        guide: buildGuideMeta(
+          this.activeEditorSelection.categoryId,
+          this.activeEditorSelection.jamo,
+          this.activeEditorSelection.example
+        ),
+      });
+    }
+    this._renderActiveJamoEditor();
     this.previewPanel?.updateJamoLib(fullLib);
     this.browserPanel?.updateJamoLib(fullLib);
     this.templateBrowserPanel?.updateJamoLib(fullLib);
@@ -474,6 +533,8 @@ class FonttoApp {
     if (!panels.length) return;
 
     const entries = Object.entries(this.pendingParts);
+    const highlightedPendingKeys = new Set(this.uiFeedback?.pendingKeys || []);
+    const feedbackMessage = this.uiFeedback?.message || '';
     panels.forEach((panel, index) => {
       const suffix = index === 0 ? 'Draw' : 'Template';
       const importedStrip = index === 0
@@ -492,6 +553,7 @@ class FonttoApp {
         : '';
       panel.innerHTML = `
       ${importedStrip}
+      ${feedbackMessage ? `<div class="pending-feedback-banner">${feedbackMessage}</div>` : ''}
       <div class="pending-parts-header">
         <div>
           <h2>저장된 부분</h2>
@@ -528,7 +590,7 @@ class FonttoApp {
 
       entries.forEach(([key, part]) => {
         const card = document.createElement('div');
-        card.className = 'pending-part-card';
+        card.className = `pending-part-card${highlightedPendingKeys.has(key) ? ' is-highlighted' : ''}`;
 
         const canvas = createPartPreviewCanvas(part.commands, 96);
         const title = document.createElement('div');
@@ -543,12 +605,21 @@ class FonttoApp {
         remove.type = 'button';
         remove.className = 'tool-btn pending-part-remove';
         remove.textContent = '삭제';
-        remove.addEventListener('click', () => this._clearPendingPart(key));
+        remove.addEventListener('click', (event) => {
+          event.stopPropagation();
+          this._clearPendingPart(key);
+        });
 
         card.appendChild(canvas);
         card.appendChild(title);
         card.appendChild(meta);
         card.appendChild(remove);
+        card.addEventListener('click', () => {
+          this._openActiveEditorForSelection(part.selection, {
+            sourceChar: part.sourceChar || '',
+            sourceImageSrc: part.sourceImageSrc || '',
+          });
+        });
         grid.appendChild(card);
       });
     });
@@ -574,9 +645,10 @@ class FonttoApp {
       const isApplied = appliedTargets.length > 0;
       const isComplete = appliedTargets.length === slot.targets.length && slot.targets.length > 0;
       const isPartial = isApplied && !isComplete;
+      const isHighlighted = this.uiFeedback?.importedChars?.includes(slot.char);
       const card = document.createElement('button');
       card.type = 'button';
-      card.className = `pending-imported-card ${isPartial ? 'is-partial' : ''} ${isComplete ? 'is-complete' : ''}`.trim();
+      card.className = `pending-imported-card ${isPartial ? 'is-partial' : ''} ${isComplete ? 'is-complete' : ''} ${isHighlighted ? 'is-highlighted' : ''}`.trim();
 
       const image = document.createElement('img');
       image.className = 'pending-imported-card-image';
@@ -605,7 +677,7 @@ class FonttoApp {
       card.appendChild(title);
       card.appendChild(subtitle);
       card.addEventListener('click', () => {
-        showSyllableSplitModal(this, slot.char, {
+        this._showSyllableSplitModal(slot.char, {
           imageSrc: slot.imageSrc,
           targets: slot.targets,
           sequence: importedSlots,
@@ -619,7 +691,592 @@ class FonttoApp {
 
 
 
-  _onJamoSelect() {}
+  _onJamoSelect(categoryId, jamo, example, guide) {
+    this._openActiveEditorForSelection({
+      categoryId,
+      jamo,
+      example,
+      guide: guide || buildGuideMeta(categoryId, jamo, example),
+    });
+  }
+
+  _openActiveEditorForSelection(selection, options = {}) {
+    if (!selection?.categoryId || !selection?.jamo) return;
+    const baseExample = selection.example || this._getSelectionForTarget(selection.categoryId, selection.jamo)?.example || '';
+    const sourceState = this._getSelectionSourceState(selection);
+    const sourceChar = options.sourceChar || sourceState.sourceChar || '';
+    const resolvedExample = sourceChar || baseExample;
+    const resolvedGuide = buildGuideMeta(selection.categoryId, selection.jamo, resolvedExample);
+    const nextSelection = this._applyGuideOverrideToSelection({
+      ...selection,
+      example: resolvedExample,
+      sourceChar,
+      sourceImageSrc: options.sourceImageSrc || sourceState.sourceImageSrc || '',
+      sourceMaskImageSrc: options.sourceMaskImageSrc || sourceState.sourceMaskImageSrc || '',
+      guideEditorImageSrc: options.guideEditorImageSrc || sourceState.guideEditorImageSrc || '',
+      guide: resolvedGuide,
+    });
+    this.activeEditorSelection = nextSelection;
+    this._renderActiveJamoEditor();
+  }
+
+  _getSelectionSourceState(selection) {
+    if (!selection?.categoryId || !selection?.jamo) {
+      return {
+        sourceChar: '',
+        sourceImageSrc: '',
+        sourceMaskImageSrc: '',
+        guideEditorImageSrc: '',
+        strokes: [],
+        guideImageAlignment: null,
+        guideFocusImageSrc: '',
+        guideFocusTransform: null,
+      };
+    }
+
+    const key = `${selection.categoryId}_${selection.jamo}`;
+    const pending = this.pendingParts?.[key] || null;
+    const draft = this.jamoDrafts?.[key] || null;
+    const state = pending || draft || {};
+
+    return {
+      sourceChar: state.sourceChar || '',
+      sourceImageSrc: state.sourceImageSrc || '',
+      sourceMaskImageSrc: state.sourceMaskImageSrc || '',
+      guideEditorImageSrc: state.guideEditorImageSrc || '',
+      strokes: Array.isArray(state.strokes) ? state.strokes : [],
+      guideImageAlignment: state.guideImageAlignment || null,
+      guideFocusImageSrc: state.guideFocusImageSrc || '',
+      guideFocusTransform: state.guideFocusTransform || null,
+    };
+  }
+
+  _renderActiveJamoEditor() {
+    const container = document.getElementById('activeJamoEditorPanel');
+    if (!container) return;
+
+    const selection = this.activeEditorSelection
+      ? this._applyGuideOverrideToSelection(this.activeEditorSelection)
+      : null;
+    if (!selection) {
+      container.innerHTML = `
+        <div class="active-jamo-editor-empty">
+          왼쪽 자모 카드를 선택하면 여기서 획을 그리거나 위치를 직접 조정할 수 있습니다.
+        </div>
+      `;
+      return;
+    }
+
+    this.activeEditorSelection = selection;
+    const draftKey = `${selection.categoryId}_${selection.jamo}`;
+    const savedDraft = this._getSelectionSourceState(selection);
+    const canEmbedSourceCanvasEditor = Boolean(savedDraft?.sourceMaskImageSrc && (savedDraft?.sourceChar || selection.sourceChar));
+
+    if (canEmbedSourceCanvasEditor) {
+      container.innerHTML = `
+        <div class="active-jamo-editor-card">
+          <div class="active-jamo-editor-header">
+            <div>
+              <div class="active-jamo-editor-eyebrow">${selection.categoryId}</div>
+              <h2>${selection.jamo} 편집</h2>
+              <p>가져온 글자 편집 캔버스를 그대로 사용해서 <strong>${selection.jamo}</strong> 위치와 크기만 수정합니다.</p>
+            </div>
+            <div class="active-jamo-editor-meta">
+              <span class="active-jamo-editor-chip">원본 ${savedDraft.sourceChar || selection.sourceChar}</span>
+              <span class="active-jamo-editor-chip">${selection.guide?.label || '가이드 편집'}</span>
+            </div>
+          </div>
+          <div class="active-jamo-editor-layout">
+            <div class="active-jamo-editor-canvas-shell">
+              <canvas class="template-manual-canvas active-jamo-source-canvas" id="activeJamoSourceCanvas" width="520" height="520"></canvas>
+            </div>
+            <div class="active-jamo-editor-toolbar" id="activeJamoToolbar"></div>
+          </div>
+          <div class="active-jamo-editor-footer">
+            <div class="active-jamo-editor-hint">
+              선택된 ${selection.jamo} 획 그룹만 이동하거나 크기를 바꿀 수 있습니다. 다른 획은 고정됩니다.
+            </div>
+            <div class="active-jamo-editor-actions">
+              <button class="gen-btn" type="button" id="activeJamoEmbeddedSaveBtn">저장</button>
+              <button class="gen-btn download-btn" type="button" id="activeJamoEmbeddedSaveNextBtn">저장 후 다음</button>
+            </div>
+          </div>
+        </div>
+      `;
+
+      this.activeDrawingCanvas = null;
+      this.activeToolbar = null;
+      this._mountEmbeddedSourceCanvasEditor(selection, savedDraft);
+      return;
+    }
+
+    const strokeCount = Array.isArray(savedDraft?.strokes) ? savedDraft.strokes.length : 0;
+    const guideRegion = selection.guide?.targetRegion ? { ...selection.guide.targetRegion } : null;
+    this.activeGuideRegion = guideRegion ? { ...guideRegion } : null;
+
+    container.innerHTML = `
+      <div class="active-jamo-editor-card">
+        <div class="active-jamo-editor-header">
+          <div>
+            <div class="active-jamo-editor-eyebrow">${selection.categoryId}</div>
+            <h2>${selection.jamo} 편집</h2>
+            <p>예시 글자 <strong>${selection.example}</strong>를 기준으로 획을 그리고, <strong>가이드 글자 조정</strong>에서 가이드 위치를 맞출 수 있습니다.</p>
+          </div>
+          <div class="active-jamo-editor-meta">
+            <span class="active-jamo-editor-chip">가이드 ${selection.example}</span>
+            ${selection.sourceChar ? `<span class="active-jamo-editor-chip">원본 ${selection.sourceChar}</span>` : ''}
+            <span class="active-jamo-editor-chip">${strokeCount}개 획</span>
+            <span class="active-jamo-editor-chip">${selection.guide?.label || '가이드 편집'}</span>
+          </div>
+        </div>
+        <div class="active-jamo-editor-modebar">
+          <button class="tool-btn" type="button" data-editor-mode="guide-focus">가이드 글자 조정</button>
+        </div>
+        <div class="active-jamo-editor-layout">
+          <div class="active-jamo-editor-canvas-shell">
+            <canvas class="active-jamo-editor-canvas" id="activeJamoCanvas"></canvas>
+          </div>
+          <div class="active-jamo-editor-toolbar" id="activeJamoToolbar"></div>
+        </div>
+        <div class="active-jamo-editor-footer">
+          <div class="active-jamo-editor-hint">
+            가이드 글자 외곽을 직접 끌어 위치와 크기를 맞출 수 있습니다. 저장하면 보이는 변형이 기존 획 위치와 크기에 그대로 반영됩니다.
+          </div>
+          <div class="active-jamo-editor-actions">
+            <button class="gen-btn" type="button" id="activeJamoSaveBtn">저장</button>
+            <button class="gen-btn download-btn" type="button" id="activeJamoSaveNextBtn">저장 후 다음</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const canvasEl = document.getElementById('activeJamoCanvas');
+    const toolbarEl = document.getElementById('activeJamoToolbar');
+    if (!canvasEl || !toolbarEl) return;
+
+    const drawingCanvas = new DrawingCanvas(canvasEl, {
+      penSize: 8,
+    });
+    drawingCanvas.setGuide(selection.guide || {});
+    drawingCanvas.loadStrokes(savedDraft?.strokes || []);
+
+    const toolbar = new Toolbar(toolbarEl, {
+      onSave: () => this._saveActiveJamoEditor(false),
+      onNext: () => this._saveActiveJamoEditor(true),
+    });
+
+    this.activeDrawingCanvas = drawingCanvas;
+    this.activeToolbar = toolbar;
+    drawingCanvas.setGuideImageAlignment(savedDraft?.guideImageAlignment || null);
+    drawingCanvas.setGuideReferenceMode(savedDraft?.guideEditorImageSrc || selection.guideEditorImageSrc ? 'editor-canvas' : 'default');
+    drawingCanvas.setGuideFocusTransform(savedDraft?.guideFocusTransform || null);
+    drawingCanvas.setGuideFocusImage(null);
+    this._loadActiveGuideReferenceImage(selection, drawingCanvas);
+
+    container.querySelectorAll('[data-editor-mode]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const mode = button.getAttribute('data-editor-mode');
+        this._setActiveEditorMode(mode);
+      });
+    });
+    document.getElementById('activeJamoSaveBtn')?.addEventListener('click', () => {
+      this._saveActiveJamoEditor(false);
+    });
+    document.getElementById('activeJamoSaveNextBtn')?.addEventListener('click', () => {
+      this._saveActiveJamoEditor(true);
+    });
+    this._setActiveEditorMode('guide-focus');
+  }
+
+  async _mountEmbeddedSourceCanvasEditor(selection, sourceState) {
+    const canvas = document.getElementById('activeJamoSourceCanvas');
+    const toolbarEl = document.getElementById('activeJamoToolbar');
+    if (!canvas || !toolbarEl) return;
+
+    toolbarEl.innerHTML = '';
+    toolbarEl.classList.add('toolbar');
+    const info = document.createElement('div');
+    info.className = 'toolbar-group';
+    info.innerHTML = `
+      <span class="toolbar-label">위치 조정</span>
+      <div class="template-status">선택된 획 그룹만 드래그해서 이동하거나 모서리를 잡고 크기를 변경하세요.</div>
+    `;
+    toolbarEl.appendChild(info);
+
+    const maskSrc = sourceState?.sourceMaskImageSrc;
+    if (!maskSrc) return;
+
+    try {
+      const image = await this._readImageSource(maskSrc);
+      if (selection !== this.activeEditorSelection) return;
+      const offscreen = document.createElement('canvas');
+      offscreen.width = image.width;
+      offscreen.height = image.height;
+      const offscreenCtx = offscreen.getContext('2d', { willReadFrequently: true });
+      offscreenCtx.drawImage(image, 0, 0);
+      const imageData = offscreenCtx.getImageData(0, 0, image.width, image.height);
+      const extracted = extractRasterComponents(imageData);
+      const selectedIds = this._resolveSelectedComponentIdsForEmbeddedEditor(extracted, sourceState?.guideImageAlignment);
+      const state = {
+        char: sourceState?.sourceChar || selection.sourceChar || selection.example || '',
+        targets: [{ categoryId: selection.categoryId, jamo: selection.jamo, label: selection.guide?.label || `${selection.jamo} 편집` }],
+        extracted,
+        image: image,
+        imageSrc: sourceState?.sourceImageSrc || selection.sourceImageSrc || '',
+        activeTargetIndex: 0,
+        assignments: new Map(selectedIds.map((id) => [id, 0])),
+        selectedComponentIds: new Set(selectedIds),
+        contextMenuEl: null,
+        lastPointerHit: null,
+        transformDrag: null,
+        suppressNextClick: false,
+        editMode: 'select',
+        brushSize: 18,
+        editImageData: imageData,
+        isEditingMask: false,
+        cutPreview: null,
+        guideEditorImageSrc: sourceState?.guideEditorImageSrc || '',
+        lockSelectedAsGroup: true,
+      };
+
+      const render = () => {
+        this._renderManualSplitState(canvas, document.createElement('div'), document.createElement('div'), state, render);
+      };
+
+      canvas.oncontextmenu = (event) => event.preventDefault();
+      canvas.onpointerdown = (event) => {
+        if (event.button !== 0) return;
+        if (this._beginManualTransformDrag(state, canvas, event)) {
+          canvas.setPointerCapture?.(event.pointerId);
+          render();
+        }
+      };
+      canvas.onpointermove = (event) => {
+        if (!state.transformDrag) return;
+        event.preventDefault();
+        this._updateManualTransformDrag(state, canvas, event);
+        render();
+      };
+      canvas.onpointerup = (event) => {
+        if (!state.transformDrag) return;
+        this._endManualTransformDrag(state);
+        canvas.releasePointerCapture?.(event.pointerId);
+        render();
+      };
+      canvas.onpointercancel = canvas.onpointerup;
+
+      document.getElementById('activeJamoEmbeddedSaveBtn')?.addEventListener('click', () => {
+        this._saveEmbeddedSourceCanvasEditor(selection, state, false);
+      });
+      document.getElementById('activeJamoEmbeddedSaveNextBtn')?.addEventListener('click', () => {
+        this._saveEmbeddedSourceCanvasEditor(selection, state, true);
+      });
+
+      render();
+    } catch (error) {
+      console.error('Failed to mount embedded source canvas editor:', error);
+      showToast(`원본 캔버스를 불러오지 못했습니다: ${error.message}`, 'error', 3000);
+    }
+  }
+
+  _resolveSelectedComponentIdsForEmbeddedEditor(extracted, guideImageAlignment = null) {
+    if (!extracted?.components?.length) return [];
+    const storedIds = Array.isArray(guideImageAlignment?.selectedComponentIds)
+      ? guideImageAlignment.selectedComponentIds.filter((id) => extracted.components.some((component) => component.id === id))
+      : [];
+    if (storedIds.length) return storedIds;
+
+    const selectedBounds = guideImageAlignment?.selectedBounds;
+    if (!selectedBounds) return extracted.components.map((component) => component.id);
+
+    return extracted.components
+      .filter((component) => {
+        const overlap = this._rectOverlapArea(
+          {
+            x: component.bounds.minX,
+            y: component.bounds.minY,
+            w: component.bounds.w,
+            h: component.bounds.h,
+          },
+          {
+            x: selectedBounds.minX,
+            y: selectedBounds.minY,
+            w: selectedBounds.w,
+            h: selectedBounds.h,
+          }
+        );
+        const centerX = component.bounds.minX + component.bounds.w / 2;
+        const centerY = component.bounds.minY + component.bounds.h / 2;
+        const centerInside = centerX >= selectedBounds.minX
+          && centerX <= selectedBounds.maxX
+          && centerY >= selectedBounds.minY
+          && centerY <= selectedBounds.maxY;
+        return overlap > 0 || centerInside;
+      })
+      .map((component) => component.id);
+  }
+
+  _saveEmbeddedSourceCanvasEditor(selection, state, moveNext = false) {
+    if (!selection || !state?.extracted || !state.selectedComponentIds?.size) return;
+    const componentIds = [...state.selectedComponentIds];
+    const historySnapshot = this._captureHistorySnapshot();
+    const commands = selectedComponentsToPositionedCommands(state.extracted, componentIds);
+    const strokes = selectedComponentsToStrokes(state.extracted, componentIds);
+    const guideImageAlignment = this._buildGuideImageAlignmentMeta(state.extracted, componentIds);
+    const guideFocusImageSrc = this._createGuideFocusImageSrc(state.extracted, componentIds);
+    const sourceMaskImageSrc = state.editImageData ? this._createImageDataUrl(state.editImageData) : '';
+    const guideEditorImageSrc = (() => {
+      try {
+        return document.getElementById('activeJamoSourceCanvas')?.toDataURL('image/png') || '';
+      } catch {
+        return '';
+      }
+    })();
+
+    this._storeImportedSelection(selection, commands, strokes, {
+      sourceChar: state.char,
+      sourceImageSrc: state.imageSrc,
+      sourceMaskImageSrc,
+      guideEditorImageSrc,
+      guideImageAlignment,
+      guideFocusImageSrc,
+    });
+
+    this._persistState();
+    this._pushHistorySnapshot(historySnapshot, `${selection.jamo} 위치 저장`);
+    this.jamoGrid?.setCompletedMap(this._getCompletedMapFromLib());
+    this._checkGenerateReady();
+    this._refreshGlyphViews();
+    showToast(`${selection.jamo} 위치를 저장했습니다.`, 'success', 2200);
+
+    if (moveNext) {
+      this.jamoGrid?.goToNext?.();
+      return;
+    }
+    this._renderActiveJamoEditor();
+  }
+
+  _setActiveEditorMode(mode = 'guide-focus') {
+    if (!this.activeDrawingCanvas || !this.activeToolbar) return;
+
+    if (mode === 'guide') {
+      this.activeDrawingCanvas.setGuideEditMode(true);
+      this.activeDrawingCanvas.setGuideFocusEditMode(false);
+      this.activeDrawingCanvas.setStrokeSelectMode(false);
+      this.activeToolbar.setGuideEditMode(true);
+      this.activeToolbar.setStrokeSelectMode(false);
+    } else if (mode === 'guide-focus') {
+      this.activeDrawingCanvas.setGuideFocusEditMode(true);
+      this.activeDrawingCanvas.setGuideEditMode(false);
+      this.activeDrawingCanvas.setStrokeSelectMode(false);
+      this.activeToolbar.setGuideEditMode(false);
+      this.activeToolbar.setStrokeSelectMode(false);
+    } else if (mode === 'strokes') {
+      this.activeDrawingCanvas.setStrokeSelectMode(true);
+      this.activeDrawingCanvas.setGuideEditMode(false);
+      this.activeDrawingCanvas.setGuideFocusEditMode(false);
+      this.activeToolbar.setStrokeSelectMode(true);
+      this.activeToolbar.setGuideEditMode(false);
+    } else {
+      this.activeDrawingCanvas.setGuideEditMode(false);
+      this.activeDrawingCanvas.setGuideFocusEditMode(false);
+      this.activeDrawingCanvas.setStrokeSelectMode(false);
+      this.activeToolbar.setGuideEditMode(false);
+      this.activeToolbar.setStrokeSelectMode(false);
+    }
+
+    this._syncActiveEditorModeButtons(mode);
+  }
+
+  _syncActiveEditorModeButtons(mode = 'draw') {
+    const container = document.getElementById('activeJamoEditorPanel');
+    if (!container) return;
+    container.querySelectorAll('[data-editor-mode]').forEach((button) => {
+      button.classList.toggle('active', button.getAttribute('data-editor-mode') === mode);
+    });
+  }
+
+  _saveActiveJamoEditor(moveNext = false) {
+    const selection = this.activeEditorSelection;
+    const drawingCanvas = this.activeDrawingCanvas;
+    if (!selection || !drawingCanvas) return;
+
+    const historySnapshot = this._captureHistorySnapshot();
+    const draftKey = `${selection.categoryId}_${selection.jamo}`;
+    const sourceState = this._getSelectionSourceState(selection);
+    const existingDraft = {
+      ...(this.jamoDrafts[draftKey] || {}),
+      ...sourceState,
+    };
+    const previousGuideFocusTransform = existingDraft.guideFocusTransform || { dx: 0, dy: 0, scaleX: 1, scaleY: 1 };
+    const nextGuideFocusTransform = {
+      dx: drawingCanvas.guideFocusTransform?.dx || 0,
+      dy: drawingCanvas.guideFocusTransform?.dy || 0,
+      scaleX: drawingCanvas.guideFocusTransform?.scaleX || 1,
+      scaleY: drawingCanvas.guideFocusTransform?.scaleY || 1,
+    };
+    const previousGuideFocusBox = drawingCanvas.getGuideFocusBoxForTransform(previousGuideFocusTransform);
+    const nextGuideFocusBox = drawingCanvas.getGuideFocusBoxForTransform(nextGuideFocusTransform);
+    const hasGuideFocusDelta = ['dx', 'dy', 'scaleX', 'scaleY']
+      .some((key) => Math.abs((nextGuideFocusTransform[key] || 0) - (previousGuideFocusTransform[key] || 0)) > 0.0001);
+
+    if (hasGuideFocusDelta && drawingCanvas.exportStrokes().length > 0 && previousGuideFocusBox && nextGuideFocusBox) {
+      drawingCanvas.transformAllStrokesByBoxDelta(previousGuideFocusBox, nextGuideFocusBox);
+    }
+
+    const strokes = drawingCanvas.exportStrokes();
+    const targetRegion = this.activeGuideRegion || selection.guide?.targetRegion || null;
+    const preservePosition = Boolean(selection.guideEditorImageSrc || existingDraft.guideEditorImageSrc);
+    const commands = strokes.length > 0
+      ? drawingCanvas.toPathCommands({ targetRegion, preservePosition })
+      : [];
+    const storageKeys = this._getContextStorageKeysForSelection(selection);
+
+    storageKeys.forEach((storageKey) => {
+      if (commands.length > 0) {
+        this.jamoLib[storageKey] = commands;
+      } else {
+        delete this.jamoLib[storageKey];
+      }
+    });
+
+    const baseGuide = buildGuideMeta(selection.categoryId, selection.jamo, selection.example);
+    if (strokes.length > 0) {
+      this.jamoDrafts[draftKey] = {
+        ...existingDraft,
+        strokes,
+        importedStrokes: existingDraft.importedStrokes || strokes,
+        guideFocusTransform: nextGuideFocusTransform,
+        sourceChar: existingDraft.sourceChar || selection.sourceChar || '',
+        sourceImageSrc: existingDraft.sourceImageSrc || selection.sourceImageSrc || '',
+        guideEditorImageSrc: existingDraft.guideEditorImageSrc || selection.guideEditorImageSrc || '',
+      };
+      this.jamoGrid?.markCompleted(selection.categoryId, selection.jamo);
+      this._trackRecentJamoEdit(draftKey);
+    } else {
+      this.jamoDrafts[draftKey] = {
+        ...existingDraft,
+        guideFocusTransform: nextGuideFocusTransform,
+        sourceChar: existingDraft.sourceChar || selection.sourceChar || '',
+        sourceImageSrc: existingDraft.sourceImageSrc || selection.sourceImageSrc || '',
+        guideEditorImageSrc: existingDraft.guideEditorImageSrc || selection.guideEditorImageSrc || '',
+      };
+    }
+
+    if (this.pendingParts[draftKey]) {
+      this.pendingParts[draftKey] = {
+        ...this.pendingParts[draftKey],
+        selection: {
+          ...this.pendingParts[draftKey].selection,
+          example: selection.example,
+          sourceChar: selection.sourceChar || this.pendingParts[draftKey].sourceChar || '',
+        },
+        commands,
+        strokes,
+        sourceChar: selection.sourceChar || this.pendingParts[draftKey].sourceChar || '',
+        sourceImageSrc: selection.sourceImageSrc || this.pendingParts[draftKey].sourceImageSrc || '',
+        guideEditorImageSrc: selection.guideEditorImageSrc || this.pendingParts[draftKey].guideEditorImageSrc || '',
+        guideImageAlignment: existingDraft.guideImageAlignment || null,
+        guideFocusImageSrc: existingDraft.guideFocusImageSrc || '',
+        guideFocusTransform: nextGuideFocusTransform,
+        savedAt: Date.now(),
+      };
+    }
+
+    const overrideKey = this._getGuideOverrideKey(selection);
+    if (targetRegion && baseGuide?.targetRegion && !this._isSameGuideRegion(targetRegion, baseGuide.targetRegion)) {
+      this.guideOverrides[overrideKey] = { ...targetRegion };
+    } else {
+      delete this.guideOverrides[overrideKey];
+    }
+
+    this.activeEditorSelection = this._applyGuideOverrideToSelection({
+      ...selection,
+      guide: baseGuide,
+    });
+    this.activeGuideRegion = this.activeEditorSelection.guide?.targetRegion
+      ? { ...this.activeEditorSelection.guide.targetRegion }
+      : null;
+
+    this._persistState();
+    this._pushHistorySnapshot(historySnapshot, `${selection.jamo} 편집 저장`);
+    this.jamoGrid?.setCompletedMap(this._getCompletedMapFromLib());
+    this._checkGenerateReady();
+    this._refreshGlyphViews();
+
+    showToast(
+      commands.length > 0
+        ? `${selection.jamo} 입력과 가이드 위치를 저장했습니다.`
+        : `${selection.jamo} 입력을 비웠습니다.`,
+      'success',
+      2200
+    );
+
+    if (moveNext) {
+      this.jamoGrid?.goToNext?.();
+      return;
+    }
+
+    this._renderActiveJamoEditor();
+  }
+
+  async _loadActiveGuideReferenceImage(selection, drawingCanvas) {
+    if (!drawingCanvas || drawingCanvas !== this.activeDrawingCanvas) return;
+    const draft = this._getSelectionSourceState(selection);
+    const guideImageSrc = this._getGuideReferenceImageSrc(selection);
+    const focusImageSrc = draft?.guideFocusImageSrc || '';
+    drawingCanvas.setGuideReferenceImage(null);
+
+    try {
+      const [guideImage, focusImage] = await Promise.all([
+        guideImageSrc ? this._readImageSource(guideImageSrc).catch(() => null) : Promise.resolve(null),
+        focusImageSrc ? this._readImageSource(focusImageSrc).catch(() => null) : Promise.resolve(null),
+      ]);
+      if (drawingCanvas !== this.activeDrawingCanvas) return;
+      drawingCanvas.setGuideReferenceImage(guideImage);
+      drawingCanvas.setGuideFocusImage(focusImage);
+    } catch (error) {
+      console.warn('Failed to load active guide reference image:', error);
+      if (drawingCanvas === this.activeDrawingCanvas) {
+        drawingCanvas.setGuideReferenceImage(null);
+        drawingCanvas.setGuideFocusImage(null);
+      }
+    }
+  }
+
+  _getGuideReferenceImageSrc(selection) {
+    if (!selection?.categoryId || !selection?.jamo) return '';
+    const draft = this._getSelectionSourceState(selection);
+
+    if (selection?.guideEditorImageSrc) {
+      return selection.guideEditorImageSrc;
+    }
+    if (draft?.guideEditorImageSrc) {
+      return draft.guideEditorImageSrc;
+    }
+    if (selection?.sourceImageSrc) {
+      return selection.sourceImageSrc;
+    }
+
+    if (draft?.sourceImageSrc) {
+      return draft.sourceImageSrc;
+    }
+
+    const sourceChar = draft?.sourceChar;
+    if (sourceChar) {
+      const importSrc = this.syllableImports?.[sourceChar]?.imageSrc;
+      if (importSrc) return importSrc;
+      const templateSlot = this.templateImportedSlots?.find((slot) => slot?.char === sourceChar && slot?.imageSrc);
+      if (templateSlot?.imageSrc) return templateSlot.imageSrc;
+    }
+
+    const fallbackChar = selection.example;
+    if (!fallbackChar) return '';
+    const importSrc = this.syllableImports?.[fallbackChar]?.imageSrc;
+    if (importSrc) return importSrc;
+    const templateSlot = this.templateImportedSlots?.find((slot) => slot?.char === fallbackChar && slot?.imageSrc);
+    return templateSlot?.imageSrc || '';
+  }
 
   _jumpToGlyphEdit(char) {
     const info = decomposeChar(char);
@@ -650,14 +1307,14 @@ class FonttoApp {
 
   _handleGlyphCardOpen(char, meta = {}) {
     if (meta.composed) {
-      showSyllableEditorModal(this, char);
+      this._showSyllableEditorModal(char);
       return;
     }
     if (meta.imported || this.syllableImports?.[char]?.imageSrc) {
-      showSyllableSplitModal(this, char);
+      this._showSyllableSplitModal(char);
       return;
     }
-    showSyllableEditorModal(this, char);
+    this._showSyllableEditorModal(char);
   }
 
   _checkGenerateReady() {
@@ -688,6 +1345,11 @@ class FonttoApp {
     showToast(`검수하거나 내보내려면 필수 자모 ${remaining}개를 더 완성해야 합니다.`);
   }
   _showReviewModal() {
+    import('./ui/modals/review-modal.js').then(({ showReviewModal }) => {
+      showReviewModal(this);
+    });
+    return;
+
     if (!this.jamoGrid?.isAllCompleted()) {
       this._showIncompleteToast();
       return;
@@ -1058,7 +1720,7 @@ class FonttoApp {
 
   _returnToReview() {
     if (!this.reviewReturnContext) {
-      showReviewModal(this);
+      this._showReviewModal();
       return;
     }
 
@@ -1068,7 +1730,7 @@ class FonttoApp {
       selectedChar: this.reviewReturnContext.selectedChar,
     };
 
-    showReviewModal(this);
+    this._showReviewModal();
   }
 
   _getEditTargetsForSyllable(choIdx, jungIdx, jongIdx) {
@@ -1152,7 +1814,7 @@ class FonttoApp {
     const applyPart = (partKey, targets) => {
       if (!targets?.length) return;
 
-      const chars = this._getAffectedCharsForTargets(targets, Number.POSITIVE_INFINITY);
+      const chars = this._getAllAffectedCharsForTargets(targets);
       chars.forEach((affectedChar) => {
         const existing = overrides[affectedChar] || {
           cho: { dx: 0, dy: 0, sx: 1, sy: 1 },
@@ -1196,6 +1858,11 @@ class FonttoApp {
   }
 
   _showTemplateModal() {
+    import('./ui/modals/template-modal.js').then(({ showTemplateModal }) => {
+      showTemplateModal(this);
+    });
+    return;
+
     const slots = getTemplateSlots();
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
@@ -1374,6 +2041,7 @@ class FonttoApp {
   }
 
   async _showSyllableSplitModal(initialChar = '', options = {}) {
+    const { showSyllableSplitModal } = await import('./ui/modals/syllable-split-modal.js');
     return showSyllableSplitModal(this, initialChar, options);
 
     const overlay = document.createElement('div');
@@ -1579,6 +2247,7 @@ class FonttoApp {
   }
 
   async _downloadTemplate(slots) {
+    const { buildTemplatePdfBytes } = await import('./core/template-pdf.js');
     const pdfBytes = await buildTemplatePdfBytes(slots, (src) => this._readImageSource(src));
     const url = URL.createObjectURL(new Blob([pdfBytes], { type: 'application/pdf' }));
     const link = document.createElement('a');
@@ -1648,10 +2317,14 @@ class FonttoApp {
   }
 
   async _expandTemplateUploadFiles(files) {
+    let renderPdfFileToCanvases = null;
     const sources = [];
     for (const file of files) {
       const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
       if (isPdf) {
+        if (!renderPdfFileToCanvases) {
+          ({ renderPdfFileToCanvases } = await import('./core/pdf-renderer.js'));
+        }
         sources.push(...await renderPdfFileToCanvases(file));
       } else {
         sources.push(await this._readImageFile(file));
@@ -1766,7 +2439,7 @@ class FonttoApp {
       card.appendChild(subtitle);
       card.appendChild(targetList);
       card.addEventListener('click', () => {
-        showSyllableSplitModal(this, slot.char, {
+        this._showSyllableSplitModal(slot.char, {
           imageSrc: slot.imageSrc,
           targets: slot.targets,
           sequence: importedSlots,
@@ -1815,6 +2488,330 @@ class FonttoApp {
     const ctx = canvas.getContext('2d');
     ctx.putImageData(imageData, 0, 0);
     return canvas.toDataURL('image/png');
+  }
+
+  async _learnSpacingFromTemplate() {
+    if (!this.templateImportedSlots?.length) {
+      showToast('먼저 템플릿 원본 글자를 업로드하세요.', 'warning', 2600);
+      return;
+    }
+
+    const historySnapshot = this._captureHistorySnapshot();
+    const accumulator = this._createSpacingLearningAccumulator();
+    let usedSamples = 0;
+
+    for (const slot of this.templateImportedSlots) {
+      const learned = await this._learnSpacingSampleFromImportedSlot(slot, accumulator);
+      if (learned) usedSamples += 1;
+    }
+
+    if (usedSamples === 0) {
+      showToast('간격 학습에 쓸 수 있는 템플릿 글자를 충분히 찾지 못했습니다.', 'warning', 3200);
+      return;
+    }
+
+    this.compositionStyleProfile = this._buildSpacingProfileFromAccumulator(accumulator, usedSamples);
+    setCompositionStyleProfile(this.compositionStyleProfile);
+    this._persistState();
+    this._pushHistorySnapshot(historySnapshot, 'AI 간격 학습 적용');
+    this._refreshGlyphViews();
+    showToast(`템플릿 원본 ${usedSamples}개로 간격 스타일을 학습했습니다.`, 'success', 3200);
+  }
+
+  _resetLearnedSpacingProfile() {
+    const hasSamples = (this.compositionStyleProfile?.sampleCount || 0) > 0;
+    if (!hasSamples) {
+      showToast('초기화할 학습 간격 프로필이 없습니다.', 'warning', 2200);
+      return;
+    }
+
+    const historySnapshot = this._captureHistorySnapshot();
+    this.compositionStyleProfile = createEmptyCompositionStyleProfile();
+    setCompositionStyleProfile(this.compositionStyleProfile);
+    this._persistState();
+    this._pushHistorySnapshot(historySnapshot, '학습 간격 초기화');
+    this._refreshGlyphViews();
+    showToast('학습된 간격 프로필을 초기화했습니다.', 'success', 2400);
+  }
+
+  _applyLearnedSpacingToGlyphCards() {
+    if ((this.compositionStyleProfile?.sampleCount || 0) <= 0) {
+      showToast('먼저 AI 간격 학습을 실행하세요.', 'warning', 2400);
+      return;
+    }
+
+    const historySnapshot = this._captureHistorySnapshot();
+    const overrides = loadSyllableOverrides();
+    let applied = 0;
+
+    for (let cho = 0; cho < CHO.length; cho += 1) {
+      for (let jung = 0; jung < JUNG.length; jung += 1) {
+        for (let jong = 0; jong < JONG.length; jong += 1) {
+          const char = compose(cho, jung, jong);
+          const override = this._buildSyllableOverrideFromLearnedProfile(char);
+          if (!override) continue;
+          overrides[char] = override;
+          this._restoreDeletedSyllable(char);
+          applied += 1;
+        }
+      }
+    }
+
+    if (!applied) {
+      showToast('학습 프로필을 적용할 수 있는 글자 카드를 찾지 못했습니다.', 'warning', 2800);
+      return;
+    }
+
+    saveSyllableOverrides(overrides);
+    this._persistState();
+    this._pushHistorySnapshot(historySnapshot, '학습 간격을 글자 카드에 적용');
+    this._refreshGlyphViews();
+    showToast(`학습한 간격을 전체 글자 카드 ${applied}개에 적용했습니다.`, 'success', 3400);
+  }
+
+  _createSpacingLearningAccumulator() {
+    return {
+      cv: this._createSpacingLearningContextAccumulator(),
+      cvc_simple: this._createSpacingLearningContextAccumulator(),
+      cvc_compound: this._createSpacingLearningContextAccumulator(),
+    };
+  }
+
+  _createSpacingLearningContextAccumulator() {
+    return {
+      cho: this._createSpacingLearningPartAccumulator(),
+      jung: this._createSpacingLearningPartAccumulator(),
+      jong: this._createSpacingLearningPartAccumulator(),
+    };
+  }
+
+  _createSpacingLearningPartAccumulator() {
+    return {
+      dx: 0,
+      dy: 0,
+      sx: 0,
+      sy: 0,
+      samples: 0,
+    };
+  }
+
+  async _learnSpacingSampleFromImportedSlot(slot, accumulator) {
+    const info = decomposeChar(slot?.char || '');
+    if (!info) return false;
+
+    const layout = getBaseCompositionLayout(info.jung, info.jong);
+    if (!layout) return false;
+
+    const image = await this._readImageSource(slot.imageSrc);
+    const canvas = document.createElement('canvas');
+    canvas.width = image.width;
+    canvas.height = image.height;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(image, 0, 0);
+    const extracted = extractRasterComponents(ctx.getImageData(0, 0, image.width, image.height));
+    if (!extracted?.components?.length) return false;
+
+    const overallBounds = this._mergeBounds(extracted.components.map((component) => component.bounds));
+    if (!overallBounds) return false;
+
+    const parts = ['cho', 'jung'];
+    if (info.jong > 0 && layout.jong) parts.push('jong');
+
+    const assigned = {};
+    extracted.components.forEach((component) => {
+      const normalized = this._normalizeComponentBounds(component.bounds, overallBounds);
+      const bestPart = this._findBestLayoutPartForBounds(normalized, layout, parts);
+      if (!bestPart) return;
+      if (!assigned[bestPart]) assigned[bestPart] = [];
+      assigned[bestPart].push(normalized);
+    });
+
+    let learnedAny = false;
+    const contextKey = getCompositionContextKey(info.jong);
+    parts.forEach((partKey) => {
+      if (!assigned[partKey]?.length || !layout[partKey]) return;
+      const observed = this._mergeBounds(assigned[partKey]);
+      const base = layout[partKey];
+      const update = this._deriveSpacingAdjustmentFromBounds(observed, base);
+      if (!update) return;
+      const target = accumulator[contextKey][partKey];
+      target.dx += update.dx;
+      target.dy += update.dy;
+      target.sx += update.sx;
+      target.sy += update.sy;
+      target.samples += 1;
+      learnedAny = true;
+    });
+
+    return learnedAny;
+  }
+
+  _normalizeComponentBounds(bounds, overallBounds) {
+    const totalWidth = Math.max(overallBounds.maxX - overallBounds.minX + 1, 1);
+    const totalHeight = Math.max(overallBounds.maxY - overallBounds.minY + 1, 1);
+    const left = (bounds.minX - overallBounds.minX) / totalWidth;
+    const top = (bounds.minY - overallBounds.minY) / totalHeight;
+    const width = bounds.w / totalWidth;
+    const height = bounds.h / totalHeight;
+    return {
+      x: left,
+      y: 1 - (top + height),
+      w: width,
+      h: height,
+    };
+  }
+
+  _findBestLayoutPartForBounds(bounds, layout, parts) {
+    let bestPart = '';
+    let bestScore = Number.POSITIVE_INFINITY;
+
+    parts.forEach((partKey) => {
+      const slot = layout[partKey];
+      if (!slot) return;
+      const boundsCenterX = bounds.x + bounds.w / 2;
+      const boundsCenterY = bounds.y + bounds.h / 2;
+      const slotCenterX = slot.x + slot.w / 2;
+      const slotCenterY = slot.y + slot.h / 2;
+      const dx = boundsCenterX - slotCenterX;
+      const dy = boundsCenterY - slotCenterY;
+      const sizePenalty = Math.abs(bounds.w - slot.w) + Math.abs(bounds.h - slot.h);
+      const score = Math.sqrt(dx * dx + dy * dy) + sizePenalty * 0.35;
+      if (score < bestScore) {
+        bestScore = score;
+        bestPart = partKey;
+      }
+    });
+
+    return bestPart;
+  }
+
+  _deriveSpacingAdjustmentFromBounds(observed, base) {
+    if (!observed || !base || base.w <= 0 || base.h <= 0) return null;
+    const observedCenterX = observed.x + observed.w / 2;
+    const observedCenterY = observed.y + observed.h / 2;
+    const baseCenterX = base.x + base.w / 2;
+    const baseCenterY = base.y + base.h / 2;
+    return {
+      dx: this._clampNumber((observedCenterX - baseCenterX) * 0.65, -0.12, 0.12),
+      dy: this._clampNumber((observedCenterY - baseCenterY) * 0.65, -0.12, 0.12),
+      sx: this._clampNumber(1 + ((observed.w / base.w) - 1) * 0.45, 0.72, 1.28),
+      sy: this._clampNumber(1 + ((observed.h / base.h) - 1) * 0.45, 0.72, 1.28),
+    };
+  }
+
+  _buildSpacingProfileFromAccumulator(accumulator, sampleCount) {
+    const profile = createEmptyCompositionStyleProfile();
+    profile.learnedAt = new Date().toISOString();
+    profile.sampleCount = sampleCount;
+
+    Object.entries(accumulator).forEach(([contextKey, context]) => {
+      ['cho', 'jung', 'jong'].forEach((partKey) => {
+        const source = context[partKey];
+        const target = profile.contexts[contextKey][partKey];
+        if (!source.samples) return;
+        target.dx = this._clampNumber(source.dx / source.samples, -0.12, 0.12);
+        target.dy = this._clampNumber(source.dy / source.samples, -0.12, 0.12);
+        target.sx = this._clampNumber(source.sx / source.samples, 0.72, 1.28);
+        target.sy = this._clampNumber(source.sy / source.samples, 0.72, 1.28);
+        target.samples = source.samples;
+      });
+    });
+
+    return profile;
+  }
+
+  _buildSyllableOverrideFromLearnedProfile(char) {
+    const info = decomposeChar(char);
+    if (!info) return null;
+
+    const contextKey = getCompositionContextKey(info.jong);
+    const contextProfile = this.compositionStyleProfile?.contexts?.[contextKey];
+    if (!contextProfile) return null;
+
+    const clonePart = (part) => ({
+      dx: Number.isFinite(part?.dx) ? part.dx * 1000 : 0,
+      dy: Number.isFinite(part?.dy) ? part.dy * 1000 : 0,
+      sx: Number.isFinite(part?.sx) ? part.sx : 1,
+      sy: Number.isFinite(part?.sy) ? part.sy : 1,
+    });
+
+    return {
+      cho: clonePart(contextProfile.cho),
+      jung: clonePart(contextProfile.jung),
+      jong: info.jong > 0 ? clonePart(contextProfile.jong) : { dx: 0, dy: 0, sx: 1, sy: 1 },
+    };
+  }
+
+  _mergeBounds(boundsList = []) {
+    const validBounds = boundsList.filter(Boolean);
+    if (!validBounds.length) return null;
+    const merged = validBounds.reduce((acc, bounds) => ({
+      minX: Math.min(acc.minX, bounds.minX ?? bounds.x),
+      minY: Math.min(acc.minY, bounds.minY ?? bounds.y),
+      maxX: Math.max(acc.maxX, bounds.maxX ?? ((bounds.x ?? 0) + (bounds.w ?? 0))),
+      maxY: Math.max(acc.maxY, bounds.maxY ?? ((bounds.y ?? 0) + (bounds.h ?? 0))),
+    }), {
+      minX: Number.POSITIVE_INFINITY,
+      minY: Number.POSITIVE_INFINITY,
+      maxX: Number.NEGATIVE_INFINITY,
+      maxY: Number.NEGATIVE_INFINITY,
+    });
+
+    return {
+      ...merged,
+      x: merged.minX,
+      y: merged.minY,
+      w: merged.maxX - merged.minX,
+      h: merged.maxY - merged.minY,
+    };
+  }
+
+  _buildGuideImageAlignmentMeta(extracted, componentIds = []) {
+    if (!extracted?.components?.length || !componentIds?.length) return null;
+    const selectedBounds = this._mergeBounds(
+      extracted.components
+        .filter((component) => componentIds.includes(component.id))
+        .map((component) => component.bounds)
+    );
+    if (!selectedBounds) return null;
+    return {
+      sourceWidth: extracted.width,
+      sourceHeight: extracted.height,
+      selectedComponentIds: [...componentIds],
+      selectedBounds,
+    };
+  }
+
+  _createGuideFocusImageSrc(extracted, componentIds = []) {
+    if (!extracted?.components?.length || !componentIds?.length) return '';
+    const selectedComponents = extracted.components.filter((component) => componentIds.includes(component.id));
+    const bounds = this._mergeBounds(selectedComponents.map((component) => component.bounds));
+    if (!bounds) return '';
+
+    const width = Math.max(Math.ceil(bounds.w) + 1, 1);
+    const height = Math.max(Math.ceil(bounds.h) + 1, 1);
+    const imageData = new ImageData(width, height);
+
+    selectedComponents.forEach((component) => {
+      component.pixels.forEach((pixelIndex) => {
+        const px = pixelIndex % extracted.width;
+        const py = Math.floor(pixelIndex / extracted.width);
+        const outX = px - bounds.minX;
+        const outY = py - bounds.minY;
+        if (outX < 0 || outY < 0 || outX >= width || outY >= height) return;
+        const idx = (outY * width + outX) * 4;
+        imageData.data[idx] = 255;
+        imageData.data[idx + 1] = 255;
+        imageData.data[idx + 2] = 255;
+        imageData.data[idx + 3] = 255;
+      });
+    });
+
+    return this._createImageDataUrl(imageData);
+  }
+
+  _clampNumber(value, min, max) {
+    return Math.min(Math.max(value, min), max);
   }
 
   _validateTemplateImage(image, metrics) {
@@ -2629,6 +3626,85 @@ class FonttoApp {
     const extracted = extractRasterComponents(state.editImageData);
     state.extracted = extracted;
 
+    if (state?.lockSelectedAsGroup) {
+      const selectedSnapshotComponents = snapshot.components.filter((component) => component.selected);
+      const unselectedSnapshotComponents = snapshot.components.filter((component) => !component.selected);
+      const selectedBounds = this._mergeBounds(selectedSnapshotComponents.map((component) => component.bounds));
+      const nextAssignments = new Map();
+      const nextSelected = new Set();
+
+      if (selectedBounds) {
+        const transformedSelectedBounds = {
+          minX: Math.round((selectedBounds.minX - transform.anchorX) * transform.scaleX + transform.anchorX + transform.translateX),
+          minY: Math.round((selectedBounds.minY - transform.anchorY) * transform.scaleY + transform.anchorY + transform.translateY),
+          maxX: Math.round((selectedBounds.maxX - transform.anchorX) * transform.scaleX + transform.anchorX + transform.translateX),
+          maxY: Math.round((selectedBounds.maxY - transform.anchorY) * transform.scaleY + transform.anchorY + transform.translateY),
+        };
+        transformedSelectedBounds.w = transformedSelectedBounds.maxX - transformedSelectedBounds.minX;
+        transformedSelectedBounds.h = transformedSelectedBounds.maxY - transformedSelectedBounds.minY;
+
+        extracted.components.forEach((component) => {
+          const componentRect = {
+            x: component.bounds.minX,
+            y: component.bounds.minY,
+            w: component.bounds.w,
+            h: component.bounds.h,
+          };
+          const selectedRect = {
+            x: transformedSelectedBounds.minX,
+            y: transformedSelectedBounds.minY,
+            w: transformedSelectedBounds.w,
+            h: transformedSelectedBounds.h,
+          };
+          const overlap = this._rectOverlapArea(componentRect, selectedRect);
+          const centerX = component.bounds.minX + component.bounds.w / 2;
+          const centerY = component.bounds.minY + component.bounds.h / 2;
+          const centerInside = centerX >= transformedSelectedBounds.minX
+            && centerX <= transformedSelectedBounds.maxX
+            && centerY >= transformedSelectedBounds.minY
+            && centerY <= transformedSelectedBounds.maxY;
+          if (overlap > 0 || centerInside) {
+            nextSelected.add(component.id);
+            nextAssignments.set(component.id, state.activeTargetIndex ?? 0);
+          }
+        });
+      }
+
+      const available = extracted.components
+        .filter((component) => !nextSelected.has(component.id))
+        .map((component) => ({
+          component,
+          centerX: component.bounds.minX + component.bounds.w / 2,
+          centerY: component.bounds.minY + component.bounds.h / 2,
+          taken: false,
+        }));
+
+      unselectedSnapshotComponents.forEach((oldComponent) => {
+        const expectedX = oldComponent.centerX;
+        const expectedY = oldComponent.centerY;
+        let best = null;
+        let bestDistance = Number.POSITIVE_INFINITY;
+        available.forEach((candidate) => {
+          if (candidate.taken) return;
+          const distance = Math.abs(candidate.centerX - expectedX) + Math.abs(candidate.centerY - expectedY);
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            best = candidate;
+          }
+        });
+
+        if (!best) return;
+        best.taken = true;
+        if (oldComponent.assignedTarget !== undefined) {
+          nextAssignments.set(best.component.id, oldComponent.assignedTarget);
+        }
+      });
+
+      state.assignments = nextAssignments;
+      state.selectedComponentIds = nextSelected;
+      return;
+    }
+
     const available = extracted.components.map((component) => ({
       component,
       centerX: component.bounds.minX + component.bounds.w / 2,
@@ -2783,7 +3859,13 @@ class FonttoApp {
       }
 
       let commands = selectedComponentsToPositionedCommands(state.extracted, componentIds);
-      let strokes = selectedComponentsToStrokes(state.extracted, componentIds, selection.guide?.targetRegion);
+      const guideImageAlignment = this._buildGuideImageAlignmentMeta(state.extracted, componentIds);
+      const guideFocusImageSrc = this._createGuideFocusImageSrc(state.extracted, componentIds);
+      const guideEditorImageSrc = state.guideEditorImageSrc || (state.editImageData ? this._createImageDataUrl(state.editImageData) : '');
+      const sourceMaskImageSrc = state.editImageData ? this._createImageDataUrl(state.editImageData) : '';
+      let strokes = guideEditorImageSrc
+        ? selectedComponentsToStrokes(state.extracted, componentIds)
+        : selectedComponentsToStrokes(state.extracted, componentIds, selection.guide?.targetRegion);
       if (!commands.length) {
         commands = selectedComponentsToCommands(state.extracted, componentIds);
         strokes = selectedComponentsToStrokes(state.extracted, componentIds);
@@ -2793,7 +3875,14 @@ class FonttoApp {
         return;
       }
 
-      this._storeImportedSelection(selection, commands, strokes);
+      this._storeImportedSelection(selection, commands, strokes, {
+        sourceChar: state.char,
+        sourceImageSrc: state.imageSrc,
+        sourceMaskImageSrc,
+        guideEditorImageSrc,
+        guideImageAlignment,
+        guideFocusImageSrc,
+      });
       applied += 1;
       appliedTargets.push(target);
     });
@@ -2822,6 +3911,17 @@ class FonttoApp {
       this._checkGenerateReady();
       this._renderPendingPartsPanel();
       this._focusAppliedGlyphCard(state.char, appliedTargets);
+      const browserChars = this._getAffectedCharsForTargets(appliedTargets, 6);
+      if (state.char && !browserChars.includes(state.char)) {
+        browserChars.unshift(state.char);
+      }
+      this._setUiFeedback({
+        importedChars: state.char ? [state.char] : [],
+        browserChars: browserChars.slice(0, 6),
+        message: applied === 1
+          ? '적용된 글자 카드 1곳을 오른쪽 목록에서 강조했습니다.'
+          : `적용된 글자 카드 ${applied}곳과 연결된 결과를 오른쪽 목록에서 강조했습니다.`,
+      });
     }
 
     return {
@@ -2842,6 +3942,7 @@ class FonttoApp {
     }
 
     let saved = 0;
+    const savedKeys = [];
     const skipped = [];
     state.targets.forEach((target, index) => {
       const componentIds = [...state.assignments.entries()]
@@ -2859,7 +3960,13 @@ class FonttoApp {
       }
 
       let commands = selectedComponentsToPositionedCommands(state.extracted, componentIds);
-      let strokes = selectedComponentsToStrokes(state.extracted, componentIds, selection.guide?.targetRegion);
+      const guideImageAlignment = this._buildGuideImageAlignmentMeta(state.extracted, componentIds);
+      const guideFocusImageSrc = this._createGuideFocusImageSrc(state.extracted, componentIds);
+      const guideEditorImageSrc = state.guideEditorImageSrc || (state.editImageData ? this._createImageDataUrl(state.editImageData) : '');
+      const sourceMaskImageSrc = state.editImageData ? this._createImageDataUrl(state.editImageData) : '';
+      let strokes = guideEditorImageSrc
+        ? selectedComponentsToStrokes(state.extracted, componentIds)
+        : selectedComponentsToStrokes(state.extracted, componentIds, selection.guide?.targetRegion);
       if (!commands.length) {
         commands = selectedComponentsToCommands(state.extracted, componentIds);
         strokes = selectedComponentsToStrokes(state.extracted, componentIds);
@@ -2869,13 +3976,31 @@ class FonttoApp {
         return;
       }
 
-      this._storePendingSelection(selection, commands, strokes, state.char || 'template');
+      this._storePendingSelection(
+        selection,
+        commands,
+        strokes,
+        state.char || 'template',
+        state.imageSrc || '',
+        sourceMaskImageSrc,
+        guideEditorImageSrc,
+        guideImageAlignment,
+        guideFocusImageSrc
+      );
       saved += 1;
+      savedKeys.push(`${target.categoryId}_${target.jamo}`);
     });
 
     if (saved > 0) {
       this._pushHistorySnapshot(historySnapshot, '부분 임시 저장');
       this._renderPendingPartsPanel();
+      this._setUiFeedback({
+        pendingKeys: savedKeys,
+        importedChars: state.char ? [state.char] : [],
+        message: saved === 1
+          ? '저장된 부분 1개를 아래 카드에서 강조했습니다.'
+          : `저장된 부분 ${saved}개를 아래 카드에서 강조했습니다.`,
+      });
     }
 
     return {
@@ -2951,6 +4076,26 @@ class FonttoApp {
     return chars;
   }
 
+  _getAllAffectedCharsForTargets(targets = []) {
+    if (!targets.length) return [];
+
+    const targetKeys = new Set(targets.map((target) => `${target.categoryId}_${target.jamo}`));
+    const chars = [];
+
+    for (let cho = 0; cho < CHO.length; cho += 1) {
+      for (let jung = 0; jung < JUNG.length; jung += 1) {
+        for (let jong = 0; jong < JONG.length; jong += 1) {
+          const syllableTargets = this._getEditTargetsForSyllable(cho, jung, jong);
+          const hasMatch = syllableTargets.some((target) => targetKeys.has(`${target.categoryId}_${target.jamo}`));
+          if (!hasMatch) continue;
+          chars.push(compose(cho, jung, jong));
+        }
+      }
+    }
+
+    return chars;
+  }
+
   _restoreDeletedSyllablesForTargets(targets = []) {
       const chars = this._getAffectedCharsForTargets(targets, Number.POSITIVE_INFINITY);
     if (!chars.length) return;
@@ -2967,13 +4112,61 @@ class FonttoApp {
     this.templateBrowserPanel?.focusBrowserChar(focusChar);
   }
 
-  _storePendingSelection(selection, commands, strokes, sourceChar = '') {
+  _setUiFeedback({
+    pendingKeys = [],
+    importedChars = [],
+    browserChars = [],
+    message = '',
+  } = {}) {
+    if (this.uiFeedbackTimer) {
+      clearTimeout(this.uiFeedbackTimer);
+      this.uiFeedbackTimer = null;
+    }
+
+    this.uiFeedback = {
+      pendingKeys: [...new Set((pendingKeys || []).filter(Boolean))],
+      importedChars: [...new Set((importedChars || []).filter(Boolean))],
+      browserChars: [...new Set((browserChars || []).filter(Boolean))],
+      message,
+    };
+
+    this.browserPanel?.setHighlightedChars(this.uiFeedback.browserChars);
+    this.templateBrowserPanel?.setHighlightedChars(this.uiFeedback.browserChars);
+    this._renderPendingPartsPanel();
+
+    if (!this.uiFeedback.pendingKeys.length
+      && !this.uiFeedback.importedChars.length
+      && !this.uiFeedback.browserChars.length
+      && !this.uiFeedback.message) {
+      return;
+    }
+
+    this.uiFeedbackTimer = window.setTimeout(() => {
+      this.uiFeedback = {
+        pendingKeys: [],
+        importedChars: [],
+        browserChars: [],
+        message: '',
+      };
+      this.browserPanel?.setHighlightedChars([]);
+      this.templateBrowserPanel?.setHighlightedChars([]);
+      this._renderPendingPartsPanel();
+      this.uiFeedbackTimer = null;
+    }, 3600);
+  }
+
+  _storePendingSelection(selection, commands, strokes, sourceChar = '', sourceImageSrc = '', sourceMaskImageSrc = '', guideEditorImageSrc = '', guideImageAlignment = null, guideFocusImageSrc = '') {
     const key = `${selection.categoryId}_${selection.jamo}`;
     this.pendingParts[key] = {
       selection,
       commands,
       strokes,
       sourceChar,
+      sourceImageSrc,
+      sourceMaskImageSrc,
+      guideEditorImageSrc,
+      guideImageAlignment,
+      guideFocusImageSrc,
       savedAt: Date.now(),
     };
     this._persistState();
@@ -2988,8 +4181,16 @@ class FonttoApp {
 
     const historySnapshot = this._captureHistorySnapshot();
     const appliedTargets = [];
+    const pendingCount = parts.length;
     parts.forEach((part) => {
-      this._storeImportedSelection(part.selection, part.commands, part.strokes);
+      this._storeImportedSelection(part.selection, part.commands, part.strokes, {
+        sourceChar: part.sourceChar,
+        sourceImageSrc: part.sourceImageSrc,
+        sourceMaskImageSrc: part.sourceMaskImageSrc,
+        guideEditorImageSrc: part.guideEditorImageSrc,
+        guideImageAlignment: part.guideImageAlignment,
+        guideFocusImageSrc: part.guideFocusImageSrc,
+      });
       appliedTargets.push({
         categoryId: part.selection.categoryId,
         jamo: part.selection.jamo,
@@ -3013,6 +4214,17 @@ class FonttoApp {
 
     const sourceChar = parts.length === 1 ? parts[0]?.sourceChar : '';
     this._focusAppliedGlyphCard(sourceChar, appliedTargets);
+    const browserChars = this._getAffectedCharsForTargets(appliedTargets, 6);
+    if (sourceChar && !browserChars.includes(sourceChar)) {
+      browserChars.unshift(sourceChar);
+    }
+    this._setUiFeedback({
+      browserChars: browserChars.slice(0, 6),
+      importedChars: sourceChar ? [sourceChar] : [],
+      message: pendingCount === 1
+        ? '저장된 부분 1개를 적용했고, 관련 글자 카드를 오른쪽에서 강조했습니다.'
+        : `저장된 부분 ${pendingCount}개를 적용했고, 관련 글자 카드를 오른쪽에서 강조했습니다.`,
+    });
     showToast(`저장된 부분 ${parts.length}개를 글자에 적용했습니다.`, 'success', 3000);
   }
 
@@ -3038,15 +4250,43 @@ class FonttoApp {
     const itemIndex = category.items.findIndex((item) => item === jamo);
     if (itemIndex < 0) return null;
     const example = category.examples[itemIndex];
-    return {
+    return this._applyGuideOverrideToSelection({
       categoryId,
       jamo,
       example,
       guide: buildGuideMeta(categoryId, jamo, example),
+    });
+  }
+
+  _getGuideOverrideKey(selection) {
+    if (!selection?.categoryId || !selection?.jamo) return '';
+    const scope = selection.guide?.overrideScope || 'category';
+    return scope === 'item'
+      ? `${selection.categoryId}_${selection.jamo}`
+      : selection.categoryId;
+  }
+
+  _applyGuideOverrideToSelection(selection) {
+    if (!selection?.guide) return selection;
+    const overrideKey = this._getGuideOverrideKey(selection);
+    const overrideRegion = overrideKey ? this.guideOverrides?.[overrideKey] : null;
+    if (!overrideRegion) return selection;
+    return {
+      ...selection,
+      guide: {
+        ...selection.guide,
+        targetRegion: { ...overrideRegion },
+      },
     };
   }
 
-  _storeImportedSelection(selection, commands, strokes) {
+  _isSameGuideRegion(a, b) {
+    if (!a && !b) return true;
+    if (!a || !b) return false;
+    return ['x', 'y', 'w', 'h'].every((key) => Math.abs((a[key] || 0) - (b[key] || 0)) < 0.0001);
+  }
+
+  _storeImportedSelection(selection, commands, strokes, meta = {}) {
     const storageKeys = this._getContextStorageKeysForSelection(selection);
     const broadKeys = this._getBroadStorageKeysForSelection(selection);
     broadKeys.forEach((storageKey) => {
@@ -3057,15 +4297,29 @@ class FonttoApp {
     storageKeys.forEach((storageKey) => {
       this.jamoLib[storageKey] = commands;
     });
-    this.jamoDrafts[`${selection.categoryId}_${selection.jamo}`] = {
+    const draftKey = `${selection.categoryId}_${selection.jamo}`;
+    const existingDraft = this.jamoDrafts[draftKey] || {};
+    this.jamoDrafts[draftKey] = {
+      ...existingDraft,
       strokes,
       importedStrokes: strokes,
+      sourceChar: meta.sourceChar || existingDraft.sourceChar || '',
+      sourceImageSrc: meta.sourceImageSrc || existingDraft.sourceImageSrc || '',
+      sourceMaskImageSrc: meta.sourceMaskImageSrc || existingDraft.sourceMaskImageSrc || '',
+      guideEditorImageSrc: meta.guideEditorImageSrc || existingDraft.guideEditorImageSrc || '',
+      guideImageAlignment: meta.guideImageAlignment || existingDraft.guideImageAlignment || null,
+      guideFocusImageSrc: meta.guideFocusImageSrc || existingDraft.guideFocusImageSrc || '',
     };
-    this._trackRecentJamoEdit(`${selection.categoryId}_${selection.jamo}`);
+    this._trackRecentJamoEdit(draftKey);
     this.jamoGrid.markCompleted(selection.categoryId, selection.jamo);
   }
 
   _showPreviewModal() {
+    import('./ui/modals/preview-modal.js').then(({ showPreviewModal }) => {
+      showPreviewModal(this);
+    });
+    return;
+
     const fullLib = deriveAll(this.jamoLib);
     const defaultPreviewText = '가나다라마바사\n아자차카타파하\n손글씨 폰트 테스트';
     const overlay = document.createElement('div');
@@ -3115,6 +4369,19 @@ class FonttoApp {
     });
     render();
   }
+
+  _showGenerateModal() {
+    import('./ui/modals/generate-modal.js').then(({ showGenerateModal }) => {
+      showGenerateModal(this);
+    });
+  }
+
+  _showSyllableEditorModal(char) {
+    import('./ui/modals/syllable-editor-modal.js').then(({ showSyllableEditorModal }) => {
+      showSyllableEditorModal(this, char);
+    });
+  }
+
   _renderPreviewText(text, container, jamoLib) {
     container.innerHTML = '';
     const canvas = document.createElement('canvas');
@@ -3254,23 +4521,37 @@ class FonttoApp {
   }
 
   _resetAllData() {
+    if (this.uiFeedbackTimer) {
+      clearTimeout(this.uiFeedbackTimer);
+      this.uiFeedbackTimer = null;
+    }
     clearState();
     this.jamoLib = {};
     this.jamoDrafts = {};
     this.guideOverrides = {};
     this.syllableImports = {};
     this.templateImportedSlots = [];
+    this.compositionStyleProfile = createEmptyCompositionStyleProfile();
+    setCompositionStyleProfile(this.compositionStyleProfile);
     this.pendingParts = {};
     this.downloadAccess = {
       unlocked: false,
       fontName: '',
       unlockedAt: '',
     };
+    this.uiFeedback = {
+      pendingKeys: [],
+      importedChars: [],
+      browserChars: [],
+      message: '',
+    };
     this.reviewState = getDefaultReviewState();
     this.reviewReturnContext = null;
     this.recentEditedKeys = [];
     this._generatedBuffer = null;
     this._generatedFontName = '';
+    this._generatedSkippedGlyphs = [];
+    this._generatedSourceWarnings = [];
     this.undoStack = [];
     this.redoStack = [];
     this._showLanding();
@@ -3316,9 +4597,90 @@ class FonttoApp {
       guideOverrides: this.guideOverrides,
       syllableImports: this.syllableImports,
       templateImportedSlots: this.templateImportedSlots,
+      compositionStyleProfile: this.compositionStyleProfile,
       downloadAccess: this.downloadAccess,
       pendingParts: this.pendingParts,
     });
+  }
+
+  _exportBackupFile() {
+    this._persistState();
+    const payload = createStateBackupPayload({
+      jamoLib: this.jamoLib,
+      jamoDrafts: this.jamoDrafts,
+      guideOverrides: this.guideOverrides,
+      syllableImports: this.syllableImports,
+      templateImportedSlots: this.templateImportedSlots,
+      compositionStyleProfile: this.compositionStyleProfile,
+      downloadAccess: this.downloadAccess,
+      pendingParts: this.pendingParts,
+    }, {
+      syllableOverrides: loadSyllableOverrides(),
+      deletedSyllables: loadDeletedSyllables(),
+    });
+
+    const stamp = new Date()
+      .toISOString()
+      .replaceAll('-', '')
+      .replaceAll(':', '')
+      .replace('T', '-')
+      .slice(0, 15);
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `fontto-backup-${stamp}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+    showToast('작업 상태를 백업 파일로 저장했습니다.', 'success', 2400);
+  }
+
+  async _handleImportBackupFile(event) {
+    const input = event?.target;
+    const file = input?.files?.[0];
+    if (!file) return;
+
+    try {
+      const shouldImport = window.confirm('현재 작업 상태를 백업 파일 내용으로 덮어쓸까요? 현재 상태도 먼저 백업 저장하는 편이 안전합니다.');
+      if (!shouldImport) return;
+
+      const raw = await file.text();
+      const imported = importStateBackup(raw);
+      this.jamoLib = imported.state.jamoLib || {};
+      this.jamoDrafts = imported.state.jamoDrafts || {};
+      this.guideOverrides = imported.state.guideOverrides || {};
+      this.syllableImports = imported.state.syllableImports || {};
+      this.templateImportedSlots = imported.state.templateImportedSlots || [];
+      this.compositionStyleProfile = normalizeCompositionStyleProfile(imported.state.compositionStyleProfile);
+      setCompositionStyleProfile(this.compositionStyleProfile);
+      this.pendingParts = imported.state.pendingParts || {};
+      this.downloadAccess = imported.state.downloadAccess || {
+        unlocked: false,
+        fontName: '',
+        unlockedAt: '',
+      };
+      this.reviewState = getDefaultReviewState();
+      this.reviewReturnContext = null;
+      this.recentEditedKeys = [];
+      this._generatedBuffer = null;
+      this._generatedFontName = '';
+      this._generatedSkippedGlyphs = [];
+      this._generatedSourceWarnings = [];
+      this.undoStack = [];
+      this.redoStack = [];
+
+      this._refreshEditorState();
+      this._updateReturnToReviewButton();
+      this._updateHistoryButtons();
+      showToast('백업 파일에서 작업 상태를 불러왔습니다.', 'success', 2800);
+    } catch (error) {
+      console.error('백업 파일 불러오기 실패:', error);
+      showToast(`불러오기 실패: ${error.message}`, 'error', 3800);
+    } finally {
+      if (input) input.value = '';
+    }
   }
 
   _hasUnlockedDownload(fontName) {

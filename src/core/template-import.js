@@ -167,6 +167,21 @@ export function rasterRectToCommands(imageData, targetRegion = null) {
   return maskToCommands(filteredMask, normalizedImageData.width, normalizedImageData.height, mergeComponentBounds(kept), targetRegion);
 }
 
+export function rasterRectToPositionedCommands(imageData) {
+  const normalizedImageData = normalizeRasterExportImageData(imageData);
+  const { mask, bounds } = buildMaskFromImageData(normalizedImageData);
+  if (!bounds) return [];
+
+  const components = getFilteredRasterComponents(mask, normalizedImageData.width, normalizedImageData.height, bounds);
+  if (components.length === 0) return [];
+
+  const kept = selectPrimaryComponentCluster(components, normalizedImageData.width, normalizedImageData.height);
+  if (kept.length === 0) return [];
+
+  const filteredMask = buildMaskFromComponents(kept, normalizedImageData.width, normalizedImageData.height);
+  return maskToPositionedCommands(filteredMask, normalizedImageData.width, normalizedImageData.height, mergeComponentBounds(kept));
+}
+
 export function rasterRectToStrokes(imageData, targetRegion = null) {
   const normalizedImageData = normalizeRasterExportImageData(imageData);
   const { mask, bounds } = buildMaskFromImageData(normalizedImageData);

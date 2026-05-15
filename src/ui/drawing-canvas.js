@@ -1,4 +1,4 @@
-import { rasterRectToCommands } from '../core/template-import.js';
+import { rasterRectToCommands, rasterRectToPositionedCommands } from '../core/template-import.js';
 
 /**
  * drawing-canvas.js - stroke input canvas for jamo drawing
@@ -32,6 +32,10 @@ export class DrawingCanvas {
     this.isDrawing = false;
     this.activePointerId = null;
     this.guideChar = '';
+    this.guideImage = null;
+    this.guideReferenceMode = 'default';
+    this.guideFocusImage = null;
+    this.guideImageAlignment = null;
     this.guideSequence = [];
     this.guideTargetIndices = [];
     this.guideLabel = '';
@@ -40,6 +44,9 @@ export class DrawingCanvas {
     this.guideQualityProfile = null;
     this.isGuideEditMode = false;
     this.guideEditDrag = null;
+    this.isGuideFocusEditMode = false;
+    this.guideFocusEditDrag = null;
+    this.guideFocusTransform = { dx: 0, dy: 0, scaleX: 1, scaleY: 1 };
     this.isStrokeSelectMode = false;
     this.selectedStrokeIndices = new Set();
     this.strokeSelectionDrag = null;
@@ -104,6 +111,14 @@ export class DrawingCanvas {
       return;
     }
 
+    if (this.isGuideFocusEditMode && this.guideFocusImage && this.guideImageAlignment?.selectedBounds) {
+      e.preventDefault();
+      this.activePointerId = e.pointerId;
+      this.canvas.setPointerCapture(e.pointerId);
+      this._startGuideFocusEdit(e);
+      return;
+    }
+
     if (this.isGuideEditMode && this.guideTargetRegion) {
       e.preventDefault();
       this.activePointerId = e.pointerId;
@@ -126,6 +141,10 @@ export class DrawingCanvas {
       this._continueStrokeSelectionDrag(e);
       return;
     }
+    if (this.isGuideFocusEditMode && this.guideFocusEditDrag) {
+      this._continueGuideFocusEdit(e);
+      return;
+    }
     if (this.isGuideEditMode && this.guideEditDrag) {
       this._continueGuideEdit(e);
       return;
@@ -143,6 +162,15 @@ export class DrawingCanvas {
       }
       this.activePointerId = null;
       this._endStrokeSelectionDrag();
+      if (this.canvas.hasPointerCapture(e.pointerId)) {
+        this.canvas.releasePointerCapture(e.pointerId);
+      }
+      return;
+    }
+    if (this.isGuideFocusEditMode && this.guideFocusEditDrag) {
+      this._continueGuideFocusEdit(e);
+      this.activePointerId = null;
+      this._endGuideFocusEdit();
       if (this.canvas.hasPointerCapture(e.pointerId)) {
         this.canvas.releasePointerCapture(e.pointerId);
       }
@@ -251,6 +279,20 @@ export class DrawingCanvas {
     this._emitChange();
   }
 
+  translateAllStrokes(dx = 0, dy = 0) {
+    if ((!dx && !dy) || this.strokes.length === 0) return;
+    this.strokes = this.strokes.map((stroke) => stroke.map((point) => ({
+      ...point,
+      x: point.x + dx,
+      y: point.y + dy,
+    })));
+    this.undoStack = [...this.strokes];
+    this.redoStack = [];
+    this.currentStroke = null;
+    this.render();
+    this._emitChange();
+  }
+
   loadStrokes(strokes = []) {
     this.strokes = this._cloneStrokes(strokes);
     this.currentStroke = null;
@@ -298,9 +340,41 @@ export class DrawingCanvas {
     this._emitChange();
   }
 
+  setGuideReferenceImage(image = null) {
+    this.guideImage = image || null;
+    this.render();
+  }
+
+  setGuideReferenceMode(mode = 'default') {
+    this.guideReferenceMode = mode === 'editor-canvas' ? 'editor-canvas' : 'default';
+    this.render();
+  }
+
+  setGuideFocusImage(image = null) {
+    this.guideFocusImage = image || null;
+    this.render();
+  }
+
+  setGuideFocusTransform(transform = null) {
+    this.guideFocusTransform = {
+      dx: Number.isFinite(transform?.dx) ? transform.dx : 0,
+      dy: Number.isFinite(transform?.dy) ? transform.dy : 0,
+      scaleX: Number.isFinite(transform?.scaleX) ? Math.max(transform.scaleX, 0.1) : 1,
+      scaleY: Number.isFinite(transform?.scaleY) ? Math.max(transform.scaleY, 0.1) : 1,
+    };
+    this.guideFocusEditDrag = null;
+    this.render();
+  }
+
+  setGuideImageAlignment(alignment = null) {
+    this.guideImageAlignment = alignment ? { ...alignment, selectedBounds: { ...alignment.selectedBounds } } : null;
+    this.render();
+  }
+
   setGuideEditMode(enabled) {
     this.isGuideEditMode = !!enabled;
     if (enabled) {
+      this.isGuideFocusEditMode = false;
       this.isStrokeSelectMode = false;
       this.selectedStrokeIndices.clear();
       this.strokeSelectionDrag = null;
@@ -314,12 +388,28 @@ export class DrawingCanvas {
     this.isStrokeSelectMode = !!enabled;
     if (enabled) {
       this.isGuideEditMode = false;
+      this.isGuideFocusEditMode = false;
       this.guideEditDrag = null;
+      this.guideFocusEditDrag = null;
     } else {
       this.selectedStrokeIndices.clear();
       this.strokeSelectionDrag = null;
       this.strokeMarquee = null;
     }
+    this.canvas.style.cursor = this._getCanvasCursor();
+    this.render();
+  }
+
+  setGuideFocusEditMode(enabled) {
+    this.isGuideFocusEditMode = !!enabled;
+    if (enabled) {
+      this.isGuideEditMode = false;
+      this.isStrokeSelectMode = false;
+      this.guideEditDrag = null;
+      this.strokeSelectionDrag = null;
+      this.selectedStrokeIndices.clear();
+    }
+    this.guideFocusEditDrag = null;
     this.canvas.style.cursor = this._getCanvasCursor();
     this.render();
   }
@@ -503,32 +593,64 @@ export class DrawingCanvas {
     const ctx = this.ctx;
     const w = this.displayWidth;
     const h = this.displayHeight;
+    const useEditorCanvasReference = this.guideReferenceMode === 'editor-canvas' && this.guideImage;
 
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
-    ctx.lineWidth = 1;
+    if (useEditorCanvasReference) {
+      ctx.fillStyle = '#0f1018';
+      ctx.fillRect(0, 0, w, h);
+    } else {
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
+      ctx.lineWidth = 1;
 
-    ctx.beginPath();
-    ctx.moveTo(w / 2, 0);
-    ctx.lineTo(w / 2, h);
-    ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(w / 2, 0);
+      ctx.lineTo(w / 2, h);
+      ctx.stroke();
 
-    ctx.beginPath();
-    ctx.moveTo(0, h / 2);
-    ctx.lineTo(w, h / 2);
-    ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0, h / 2);
+      ctx.lineTo(w, h / 2);
+      ctx.stroke();
 
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
-    ctx.lineWidth = 2;
-    const pad = 16;
-    ctx.strokeRect(pad, pad, w - pad * 2, h - pad * 2);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+      ctx.lineWidth = 2;
+      const pad = 16;
+      ctx.strokeRect(pad, pad, w - pad * 2, h - pad * 2);
+    }
 
-    if (this.guideChar) {
+    const guideImageBox = this._getGuideImageDrawBox();
+    if (this.guideImage && guideImageBox) {
+      const imageWidth = guideImageBox.w;
+      const imageHeight = guideImageBox.h;
+      const imageX = guideImageBox.x;
+      const imageY = guideImageBox.y;
+
       ctx.save();
-      ctx.font = `${h * 0.6}px "Pretendard", sans-serif`;
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.04)';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(this.guideChar, w / 2, h / 2);
+      ctx.globalAlpha = useEditorCanvasReference ? 1 : 0.28;
+      ctx.filter = useEditorCanvasReference ? 'none' : 'grayscale(1) contrast(1.08)';
+      ctx.drawImage(this.guideImage, imageX, imageY, imageWidth, imageHeight);
+      ctx.restore();
+    }
+
+    const guideFocusBox = this.getGuideFocusBoxForTransform();
+    if (this.guideFocusImage && guideFocusBox) {
+      const drawX = guideFocusBox.x;
+      const drawY = guideFocusBox.y;
+      const drawWidth = guideFocusBox.w;
+      const drawHeight = guideFocusBox.h;
+
+      ctx.save();
+      ctx.globalAlpha = 0.92;
+      ctx.drawImage(this.guideFocusImage, drawX, drawY, drawWidth, drawHeight);
+      ctx.globalCompositeOperation = 'source-atop';
+      ctx.fillStyle = 'rgba(80, 226, 190, 0.92)';
+      ctx.fillRect(drawX, drawY, drawWidth, drawHeight);
+      if (this.isGuideFocusEditMode) {
+        ctx.strokeStyle = 'rgba(72, 255, 184, 0.95)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(drawX, drawY, drawWidth, drawHeight);
+        this._drawGuideFocusEditHandles(guideFocusBox);
+      }
       ctx.restore();
     }
 
@@ -574,7 +696,7 @@ export class DrawingCanvas {
       ctx.restore();
     }
 
-    if (this.guideSequence.length > 0) {
+    if (!useEditorCanvasReference && this.guideSequence.length > 0) {
       const baseX = 24;
       const topY = 28;
       ctx.save();
@@ -618,6 +740,241 @@ export class DrawingCanvas {
     }
 
     ctx.restore();
+  }
+
+  _drawGuideFocusEditHandles(box) {
+    const ctx = this.ctx;
+    const handles = this._getGuideEditHandles(box);
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.96)';
+    ctx.strokeStyle = 'rgba(72, 255, 184, 1)';
+    ctx.lineWidth = 1.5;
+
+    for (const handle of handles) {
+      ctx.beginPath();
+      ctx.rect(handle.x - 6, handle.y - 6, 12, 12);
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  _getBaseGuideFocusBox() {
+    if (!this.guideFocusImage || !this.guideImageAlignment?.selectedBounds) return null;
+    const guideImageBox = this._getGuideImageDrawBox();
+    const selectedBounds = this.guideImageAlignment.selectedBounds;
+    const sourceWidth = Math.max(this.guideImageAlignment?.sourceWidth || this.guideImage?.width || 1, 1);
+    const sourceHeight = Math.max(this.guideImageAlignment?.sourceHeight || this.guideImage?.height || 1, 1);
+
+    if (guideImageBox) {
+      const scaleX = guideImageBox.w / sourceWidth;
+      const scaleY = guideImageBox.h / sourceHeight;
+      return {
+        x: guideImageBox.x + selectedBounds.minX * scaleX,
+        y: guideImageBox.y + selectedBounds.minY * scaleY,
+        w: Math.max((selectedBounds.maxX - selectedBounds.minX + 1) * scaleX, 1),
+        h: Math.max((selectedBounds.maxY - selectedBounds.minY + 1) * scaleY, 1),
+      };
+    }
+
+    if (!this.guideTargetRegion) return null;
+    const pad = 16;
+    const inner = {
+      x: pad,
+      y: pad,
+      w: this.displayWidth - pad * 2,
+      h: this.displayHeight - pad * 2,
+    };
+    const selectedWidth = Math.max((selectedBounds.maxX - selectedBounds.minX) + 1, 1);
+    const selectedHeight = Math.max((selectedBounds.maxY - selectedBounds.minY) + 1, 1);
+    const targetBox = {
+      x: inner.x + inner.w * this.guideTargetRegion.x,
+      y: inner.y + inner.h * this.guideTargetRegion.y,
+      w: inner.w * this.guideTargetRegion.w,
+      h: inner.h * this.guideTargetRegion.h,
+    };
+    const scale = Math.min(targetBox.w / selectedWidth, targetBox.h / selectedHeight);
+    return {
+      x: targetBox.x + (targetBox.w - (selectedWidth * scale)) / 2,
+      y: targetBox.y + (targetBox.h - (selectedHeight * scale)) / 2,
+      w: selectedWidth * scale,
+      h: selectedHeight * scale,
+    };
+  }
+
+  _getGuideImageDrawBox() {
+    if (!this.guideImage) return null;
+    if (this.guideReferenceMode === 'editor-canvas') {
+      return {
+        x: 0,
+        y: 0,
+        w: this.displayWidth,
+        h: this.displayHeight,
+      };
+    }
+    const pad = 16;
+    const inner = {
+      x: pad,
+      y: pad,
+      w: this.displayWidth - pad * 2,
+      h: this.displayHeight - pad * 2,
+    };
+    const imageScale = Math.min(
+      inner.w / Math.max(this.guideImage.width, 1),
+      inner.h / Math.max(this.guideImage.height, 1)
+    );
+    const imageWidth = this.guideImage.width * imageScale;
+    const imageHeight = this.guideImage.height * imageScale;
+    return {
+      x: inner.x + (inner.w - imageWidth) / 2,
+      y: inner.y + (inner.h - imageHeight) / 2,
+      w: imageWidth,
+      h: imageHeight,
+    };
+  }
+
+  getGuideFocusBoxForTransform(transform = this.guideFocusTransform) {
+    const baseBox = this._getBaseGuideFocusBox();
+    if (!baseBox) return null;
+    const scaleX = Number.isFinite(transform?.scaleX) ? Math.max(transform.scaleX, 0.1) : 1;
+    const scaleY = Number.isFinite(transform?.scaleY) ? Math.max(transform.scaleY, 0.1) : 1;
+    const centerX = baseBox.x + (baseBox.w / 2) + (Number.isFinite(transform?.dx) ? transform.dx : 0);
+    const centerY = baseBox.y + (baseBox.h / 2) + (Number.isFinite(transform?.dy) ? transform.dy : 0);
+    const drawWidth = baseBox.w * scaleX;
+    const drawHeight = baseBox.h * scaleY;
+    return {
+      x: centerX - (drawWidth / 2),
+      y: centerY - (drawHeight / 2),
+      w: drawWidth,
+      h: drawHeight,
+    };
+  }
+
+  _startGuideFocusEdit(e) {
+    const box = this.getGuideFocusBoxForTransform();
+    if (!box) return;
+    const point = this._getPos(e);
+    const handle = this._getGuideHandleAtPoint(point, box);
+    const mode = handle || (this._isPointInsideRect(point, box) ? 'move' : null);
+    if (!mode) {
+      return;
+    }
+    this.guideFocusEditDrag = {
+      mode,
+      startPoint: point,
+      startTransform: { ...this.guideFocusTransform },
+      startBox: { ...box },
+    };
+    this.canvas.style.cursor = this._getCursorForGuideMode(mode);
+  }
+
+  _continueGuideFocusEdit(e) {
+    if (!this.guideFocusEditDrag) return;
+    const point = this._getPos(e);
+    const baseBox = this._getBaseGuideFocusBox();
+    if (!baseBox) return;
+
+    if (this.guideFocusEditDrag.mode === 'move') {
+      this.guideFocusTransform = {
+        ...this.guideFocusTransform,
+        dx: this.guideFocusEditDrag.startTransform.dx + (point.x - this.guideFocusEditDrag.startPoint.x),
+        dy: this.guideFocusEditDrag.startTransform.dy + (point.y - this.guideFocusEditDrag.startPoint.y),
+      };
+      this.render();
+      return;
+    }
+
+    const nextBox = this._resizeGuideFocusBox(this.guideFocusEditDrag.startBox, point, this.guideFocusEditDrag.mode);
+    const startCenterX = baseBox.x + baseBox.w / 2;
+    const startCenterY = baseBox.y + baseBox.h / 2;
+    this.guideFocusTransform = {
+      dx: (nextBox.x + nextBox.w / 2) - startCenterX,
+      dy: (nextBox.y + nextBox.h / 2) - startCenterY,
+      scaleX: Math.max(nextBox.w / Math.max(baseBox.w, 1), 0.1),
+      scaleY: Math.max(nextBox.h / Math.max(baseBox.h, 1), 0.1),
+    };
+    this.render();
+  }
+
+  _endGuideFocusEdit() {
+    const mode = this.guideFocusEditDrag?.mode;
+    this.guideFocusEditDrag = null;
+    this.canvas.style.cursor = this.isGuideFocusEditMode ? this._getCursorForGuideMode(mode || 'move') : this._getCanvasCursor();
+    this._emitChange();
+  }
+
+  _resizeGuideFocusBox(startBox, point, mode) {
+    const minSize = 18;
+    const box = { ...startBox };
+    let anchorX = startBox.x;
+    let anchorY = startBox.y;
+
+    switch (mode) {
+      case 'nw':
+        anchorX = startBox.x + startBox.w;
+        anchorY = startBox.y + startBox.h;
+        break;
+      case 'ne':
+        anchorX = startBox.x;
+        anchorY = startBox.y + startBox.h;
+        break;
+      case 'sw':
+        anchorX = startBox.x + startBox.w;
+        anchorY = startBox.y;
+        break;
+      case 'se':
+      default:
+        anchorX = startBox.x;
+        anchorY = startBox.y;
+        break;
+    }
+
+    const rawX = mode === 'ne' || mode === 'se' ? point.x : point.x;
+    const rawY = mode === 'sw' || mode === 'se' ? point.y : point.y;
+    const minX = Math.min(anchorX, rawX);
+    const maxX = Math.max(anchorX, rawX);
+    const minY = Math.min(anchorY, rawY);
+    const maxY = Math.max(anchorY, rawY);
+
+    box.x = minX;
+    box.y = minY;
+    box.w = Math.max(maxX - minX, minSize);
+    box.h = Math.max(maxY - minY, minSize);
+
+    if (anchorX < rawX) {
+      box.x = anchorX;
+    } else {
+      box.x = anchorX - box.w;
+    }
+    if (anchorY < rawY) {
+      box.y = anchorY;
+    } else {
+      box.y = anchorY - box.h;
+    }
+
+    return box;
+  }
+
+  transformAllStrokesByBoxDelta(previousBox, nextBox) {
+    if (!previousBox || !nextBox || this.strokes.length === 0) return;
+    const prevCenterX = previousBox.x + previousBox.w / 2;
+    const prevCenterY = previousBox.y + previousBox.h / 2;
+    const nextCenterX = nextBox.x + nextBox.w / 2;
+    const nextCenterY = nextBox.y + nextBox.h / 2;
+    const scaleX = nextBox.w / Math.max(previousBox.w, 1);
+    const scaleY = nextBox.h / Math.max(previousBox.h, 1);
+
+    this.strokes = this.strokes.map((stroke) => stroke.map((point) => ({
+      ...point,
+      x: nextCenterX + (point.x - prevCenterX) * scaleX,
+      y: nextCenterY + (point.y - prevCenterY) * scaleY,
+    })));
+    this.undoStack = [...this.strokes];
+    this.redoStack = [];
+    this.render();
+    this._emitChange();
   }
 
   _drawStroke(stroke, isActive = false) {
@@ -694,16 +1051,20 @@ export class DrawingCanvas {
 
     this._drawGuides();
 
-    for (let index = 0; index < this.strokes.length; index++) {
-      const stroke = this.strokes[index];
-      this._drawStroke(stroke, false, this.selectedStrokeIndices.has(index));
+    const shouldRenderStrokes = !this.isGuideFocusEditMode;
+
+    if (shouldRenderStrokes) {
+      for (let index = 0; index < this.strokes.length; index++) {
+        const stroke = this.strokes[index];
+        this._drawStroke(stroke, false, this.selectedStrokeIndices.has(index));
+      }
     }
 
-    if (this.currentStroke && this.currentStroke.length > 1) {
+    if (shouldRenderStrokes && this.currentStroke && this.currentStroke.length > 1) {
       this._drawStroke(this.currentStroke, true);
     }
 
-    if (this.strokeMarquee) {
+    if (shouldRenderStrokes && this.strokeMarquee) {
       this._drawStrokeMarquee(this.strokeMarquee);
     }
   }
@@ -712,7 +1073,20 @@ export class DrawingCanvas {
     const outputStrokes = this._getStrokesForOutput(options);
     if (outputStrokes.length === 0) return [];
 
+    if (options.preservePosition) {
+      const directCommands = this._toPolygonPathCommands(outputStrokes, { preservePosition: true });
+      if (directCommands.length > 0) {
+        return directCommands;
+      }
+    }
+
     const imageData = this._rasterizeStrokesForExport(outputStrokes, 4);
+    if (options.preservePosition) {
+      const positionedCommands = rasterRectToPositionedCommands(imageData);
+      if (positionedCommands.length > 0) {
+        return positionedCommands;
+      }
+    }
     const commands = rasterRectToCommands(imageData, options.targetRegion ?? null);
     if (commands.length > 0) {
       return commands;
@@ -765,6 +1139,35 @@ export class DrawingCanvas {
     if (polygons.length === 0) return [];
 
     const bounds = this._getBounds(polygons.flat());
+
+    if (options.preservePosition) {
+      const scaleX = 1000 / Math.max(this.displayWidth || 1, 1);
+      const scaleY = 1000 / Math.max(this.displayHeight || 1, 1);
+      const normalize = (point) => ({
+        x: point.x * scaleX,
+        y: 1000 - (point.y * scaleY),
+      });
+
+      const commands = [];
+      for (const polygon of polygons) {
+        if (polygon.length === 0) continue;
+
+        const normalizedPolygon = polygon.map(normalize);
+        const woundPolygon = this._normalizePolygonWinding(normalizedPolygon);
+        const start = woundPolygon[0];
+        commands.push({ type: 'M', x: start.x, y: start.y, preservePosition: true });
+
+        for (let i = 1; i < woundPolygon.length; i++) {
+          const point = woundPolygon[i];
+          commands.push({ type: 'L', x: point.x, y: point.y, preservePosition: true });
+        }
+
+        commands.push({ type: 'Z', preservePosition: true });
+      }
+
+      return commands;
+    }
+
     const sourceWidth = Math.max(bounds.maxX - bounds.minX, 1);
     const sourceHeight = Math.max(bounds.maxY - bounds.minY, 1);
     const target = options.targetRegion
@@ -1681,6 +2084,7 @@ export class DrawingCanvas {
   _getCanvasCursor() {
     if (this.isStrokeSelectMode) return 'move';
     if (this.isGuideEditMode) return 'move';
+    if (this.isGuideFocusEditMode) return 'move';
     return 'crosshair';
   }
 }

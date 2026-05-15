@@ -137,6 +137,7 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
     editMode: 'select',
     brushSize: 18,
     editImageData: null,
+    guideEditorImageSrc: '',
     isEditingMask: false,
     cutPreview: null,
     statusMessage: '이미지를 불러오면 획을 선택하고 대상에 지정할 수 있습니다.',
@@ -405,6 +406,15 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
     updateWorkflowSummary();
   };
 
+  const captureEditorCanvasSnapshot = () => {
+    if (!manualCanvas) return '';
+    try {
+      return manualCanvas.toDataURL('image/png');
+    } catch {
+      return '';
+    }
+  };
+
   const loadImageIntoState = async (src) => {
     const image = await readImageSource(src);
     state.image = image;
@@ -417,6 +427,7 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
     state.transformDrag = null;
     state.suppressNextClick = false;
     state.cutPreview = null;
+    state.guideEditorImageSrc = '';
     clearLocalHistory();
     setStatus(`획 그룹 ${state.extracted.components.length}개를 찾았습니다. 필요한 획을 선택해서 대상에 지정하세요.`);
     render();
@@ -733,6 +744,7 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
   });
 
   applyBtn.addEventListener('click', () => {
+    state.guideEditorImageSrc = captureEditorCanvasSnapshot();
     if (!confirmOverwriteIfNeeded('apply')) {
       setStatus('덮어쓰기 확인을 취소했습니다.');
       render();
@@ -753,6 +765,7 @@ export async function showSyllableSplitModal(app, initialChar = '', options = {}
   });
 
   savePendingBtn.addEventListener('click', () => {
+    state.guideEditorImageSrc = captureEditorCanvasSnapshot();
     if (!confirmOverwriteIfNeeded('pending')) {
       setStatus('덮어쓰기 확인을 취소했습니다.');
       render();
